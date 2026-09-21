@@ -314,9 +314,52 @@ def paragraphs(segs, gap=3.0, maxlen=400):
     return out
 
 
-def similar(a, b):
-    import difflib
-    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+def envelope(path, hop_ms=20):
+    """RMS per 20 ms - ett kuvert att jämföra ljud med.
+
+    ponytail: ren Python-loop över samplen (~6 s per timme och spår). numpy om det
+    blir besvärande, men det finns inte garanterat på maskinen.
+    """
+    import array
+    import wave
+    try:
+        with wave.open(path, "rb") as w:
+            if w.getsampwidth() != 2:
+                return None, 0.0
+            rate = w.getframerate()
+            raw = w.readframes(w.getnframes())
+    except (wave.Error, OSError, EOFError):
+        return None, 0.0
+    a = array.array("h")
+    a.frombytes(raw[:len(raw) // 2 * 2])
+    step = max(1, int(rate * hop_ms / 1000))
+    env = [max((abs(v) for v in a[i:i + step]), default=0)
+           for i in range(0, len(a) - step + 1, step)]
+    return env, hop_ms / 1000.0
+
+
+def korr(a, b, max_lag=50):
+    """Högsta normaliserade korrelationen mellan två kuvert, med eftersökning av fördröjning.
+
+    ±max_lag fönster täcker att ljudet tar olika lång väg till en mikrofon och till
+    utgångens monitor.
+    """
+    n = min(len(a), len(b))
+    if n < 5:
+        return 0.0
+    a, b = a[:n], b[:n]
+    ma, mb = sum(a) / n, sum(b) / n
+    da, db = [x - ma for x in a], [y - mb for y in b]
+    bäst = 0.0
+    for lag in range(-max_lag, max_lag + 1):
+        x, y = (da[:n - lag], db[lag:]) if lag >= 0 else (da[-lag:], db[:n + lag])
+        if len(x) < 5:
+            continue
+        num = sum(p * q for p, q in zip(x, y))
+        den = (sum(p * p for p in x) ** 0.5) * (sum(q * q for q in y) ** 0.5)
+        if den > 0:
+            bäst = max(bäst, num / den)
+    return bäst
 
 
 def track_no(par):
@@ -326,38 +369,72 @@ def track_no(par):
         return 0
 
 
-def dedupe(paras, min_len=25, overlap_frac=0.5, ratio=0.6):
-    """Samma mening fångad av flera enheter ska inte stå flera gånger.
+def dedupe(paras, envs, ratio=0.85, overlap_frac=0.5):
+    """Samma ljud fångat av flera enheter ska inte stå flera gånger.
 
-    Två mikrofoner hör samma röst, och hör de dessutom högtalarna kommer samma
-    mening en gång till. Utgångarna ligger före mikrofonerna i enhetslistan och
-    linjeljud slår akustiskt varje gång, så kopian från den lägsta enheten vinner
-    (starttiden avgör inte - pauser gör att kopiorna börjar olika). Både
-    tidsöverlapp OCH liknande text krävs, så två personer som pratar i mun på
-    varandra behålls.
+    Texten duger inte som mått: whisper skriver olika ord för samma mening beroende på
+    vilken mikrofon som hörde den (mätt: "Vi börjar om den här kursen" mot "Någonting i
+    början av kursen" - 0,4 i textlikhet för samma sekund). Kuverten däremot är samma
+    ljud. Den starkaste kopian behålls - linjeljudet ligger högst när mötet hörs i
+    högtalarna, din egen mikrofon när du pratar.
     """
+    def nivå(par):
+        env, hop = envs.get(track_no(par), (None, 0))
+        if not env:
+            return 0.0
+        seg = env[int(par[0] / hop):int(par[1] / hop)] or [0]
+        return sum(seg) / len(seg)
+
     keep = []
     for p in paras:
         duplikat = None
         for q in keep:
             if p[2] == q[2]:                       # samma enhet -> aldrig dubblett
                 continue
-            if len(p[3]) < min_len or len(q[3]) < min_len:
-                continue
             kortast = min(p[1] - p[0], q[1] - q[0])
-            if kortast <= 0:
+            if kortast <= 0 or min(p[1], q[1]) - max(p[0], q[0]) < overlap_frac * kortast:
                 continue
-            if min(p[1], q[1]) - max(p[0], q[0]) < overlap_frac * kortast:
+            envp, hopp = envs.get(track_no(p), (None, 0))
+            envq, hopq = envs.get(track_no(q), (None, 0))
+            if not envp or not envq or hopp != hopq:
                 continue
-            if similar(p[3], q[3]) >= ratio:
+            a = envp[int(p[0] / hopp):int(p[1] / hopp)]
+            b = envq[int(q[0] / hopq):int(q[1] / hopq)]
+            if korr(a, b) >= ratio:
                 duplikat = q
                 break
         if duplikat is None:
             keep.append(p)
-        elif track_no(p) < track_no(duplikat):     # bättre enhet: byt plats
+        elif nivå(p) > nivå(duplikat):
             keep[keep.index(duplikat)] = p
     keep.sort(key=lambda p: p[0])
     return keep
+
+
+def eko_stycken(paras, envs, ratio=0.5):
+    """Räknar mikrofonstycken som hörde utgången (dvs mötet gick i högtalarna).
+
+    Mätt på en riktig körning: mikrofon mot utgång gav 0,64-0,70 i hel-stycke-
+    korrelation när ljudet hördes i rummet, medan olika ljud samtidigt ligger under
+    0,3. Gränsen 0,5 skiljer de två fallen.
+    """
+    ut = [p for p in paras if p[2].startswith("Mötet")]
+    mic = [p for p in paras if p[2].startswith("Du")]
+    träffar = 0
+    for p in mic:
+        for q in ut:
+            kortast = min(p[1] - p[0], q[1] - q[0])
+            if kortast <= 0 or min(p[1], q[1]) - max(p[0], q[0]) < 0.5 * kortast:
+                continue
+            envp, hopp = envs.get(track_no(p), (None, 0))
+            envq, hopq = envs.get(track_no(q), (None, 0))
+            if not envp or not envq or hopp != hopq:
+                continue
+            if korr(envp[int(p[0] / hopp):int(p[1] / hopp)],
+                    envq[int(q[0] / hopq):int(q[1] / hopq)]) >= ratio:
+                träffar += 1
+                break
+    return träffar, len(mic)
 
 
 def mmss(sec):
@@ -469,6 +546,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     all_segs = []
     failures = []
     kallor = []
+    envs = {}
     for i, (f, who, desc) in enumerate(tracks, 1):
         p = os.path.join(rawdir, f)
         if not os.path.exists(p):
@@ -476,6 +554,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
             continue
         if duration(p) >= 1:
             kallor.append(f"{desc} ({mmss(duration(p))})")
+        envs[i] = envelope(p)
         data, err = whisper(p, os.path.join(rawdir, os.path.splitext(f)[0]), model, vad)
         if err:
             failures.append(f"{desc}: {err}")
@@ -483,7 +562,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
         # enhetens nummer i talaretiketten: två mikrofoner har samma "Du" men är olika spår
         all_segs += segments(data, f"{who}#{i}")
     all_segs.sort(key=lambda s: s[0])
-    paras = dedupe(paragraphs(all_segs))
+    paras = dedupe(paragraphs(all_segs), envs)
 
     stamp = os.path.basename(rawdir)
     try:   # de första 16 tecknen är tidsstämpeln även när mappen fick "-2"-svans
@@ -499,6 +578,11 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     lines += [f"**Rå ljud:** `{rawdir}`", ""]
     if not vad:
         lines += ["> [!warning] Ingen VAD-modell hittad - tysta partier kan bli påhittad text", ""]
+    eko, antal_mic = eko_stycken(paras, envs)
+    if eko:
+        lines += [f"> [!warning] Mötets ljud hördes i rummet ({eko} av {antal_mic} mikrofonstycken "
+                  "är samma ljud som utgången): samma diskussion står därför två gånger. "
+                  "Hörlurar - eller ekodämpning i mötesappen - ger en ren text.", ""]
     if failures:
         lines += ["> [!warning] Transkriberingen är ofullständig", *[f"> {f}" for f in failures], ""]
     if not paras:

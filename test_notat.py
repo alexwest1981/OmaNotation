@@ -109,36 +109,57 @@ def test_ai_config_foljer_omascribe():
     assert model, "modell saknas"
 
 
-def test_dedupe_slar_ihop_samma_mening_fran_flera_enheter():
-    """Verkliga rader ur en körning: två mikrofoner + en utgång med samma mening."""
-    backlogg = [0.0, 5.0, "Mötet#4",
-                "mer i vår backlogg så att vi har mer att jobba på. Sedan från backloggen så gör du en ny "
-                "sprintlogg av de viktigaste punkterna som är högst prioriterade först."]
-    mic1 = [0.0, 5.0, "Du#5",
-            "ner i vår backlogg så att vi har mer att uppa på. Sedan från backloggen så gör vi en ny sprintlogg "
-            "av de viktigaste punkterna som högt prioriterade först."]
-    mic2 = [0.0, 5.0, "Du#6",
-            "så att vi har mer att jobba på. Sedan från backlagen så gör ni sprintlag av de viktigaste "
-            "punkterna som är högst prioriterade först."]
-    annan = [3.0, 6.0, "Mötet#4", "Förläsningen handlar om systemarkitektur och tentan är den 12 december."]
-    # mikrofonkopiorna börjar tidigast - utgången ska ändå vinna
-    kvar = notat.dedupe([mic1, mic2, backlogg, annan])
+def _kuvert(mönster, förskjutning=0, skala=1.0):
+    """Testhjälp: kuvert i stil med envelope() - 20 ms per värde."""
+    svans = [0.0] * 60
+    return ([0.0] * förskjutning + [v * skala for v in mönster] + svans, 0.02)
+
+
+def _mönster(n=300):
+    return [1000 * abs(__import__("math").sin(i / 7)) + (i % 13) for i in range(n)]
+
+
+def test_dedupe_slar_ihop_samma_ljud_fran_flera_enheter():
+    """Samma ljud på två enheter: behåll den starkaste, oavsett vad whisper skrev."""
+    m = _mönster()
+    envs = {1: _kuvert(m), 2: _kuvert(m, förskjutning=5, skala=0.3)}
+    p = [0.0, 5.0, "Mötet#1", "Vi börjar om den här kursen och det kommer inte att vara så."]
+    q = [0.0, 5.0, "Du#2", "Någonting i början av kursen att det inte kommer vara mer för läsning."]
+    r = [0.0, 5.0, "Du#3", "Helt annat ljud som ingen annan enhet hörde, om dagboken och systemet."]
+    envs[3] = _kuvert([500 * abs(__import__("math").cos(i / 3)) for i in range(300)])
+    kvar = notat.dedupe([p, q, r], envs)
     assert len(kvar) == 2, kvar
-    assert kvar[0][2] == "Mötet#4" and "backlogg" in kvar[0][3], kvar   # utgången vann
-    assert kvar[1][3].startswith("Förläsningen"), kvar
+    assert kvar[0][2] == "Mötet#1", kvar          # den starkaste kopian vann
+    assert kvar[1][2] == "Du#3", kvar             # olikt ljud behålls
 
 
-def test_dedupe_ror_inte_ett_samtal():
-    """Två personer samtidigt (olika text, samma tid) ska båda vara kvar."""
-    a = [0.0, 5.0, "Mötet#1", "Vi går vidare med händelsedriven arkitektur i stället för lager på lager."]
-    b = [0.5, 4.0, "Du#2", "Kan vi använda samma databas för båda tjänsterna eller måste vi dela upp den?"]
-    assert len(notat.dedupe([a, b])) == 2
+def test_dedupe_ror_inte_olika_ljud_samtidigt():
+    """Två personer samtidigt på olika enheter ska båda vara kvar."""
+    envs = {1: _kuvert(_mönster()), 2: _kuvert([300 * ((i * 7) % 11) for i in range(300)])}
+    a = [0.0, 5.0, "Mötet#1", "Vi går vidare med händelsedriven arkitektur i stället för lager."]
+    b = [0.5, 4.0, "Du#2", "Kan vi använda samma databas för båda tjänsterna eller dela den?"]
+    assert len(notat.dedupe([a, b], envs)) == 2
 
 
-def test_dedupe_ror_inte_korta_inpass():
-    a = [0.0, 5.0, "Mötet#1", "Ja precis."]
-    b = [1.0, 4.0, "Du#2", "Ja precis."]
-    assert len(notat.dedupe([a, b])) == 2, "korta svar ska inte slås ihop"
+def test_korr_hittar_forskjutningen():
+    m = _mönster()
+    assert notat.korr(m, [0.0] * 5 + m[:295]) > 0.9
+    olika = [(i * 7919) % 1000 for i in range(300)]
+    assert notat.korr(m, olika) < 0.5, notat.korr(m, olika)
+    assert notat.korr([0.0] * 300, [0.0] * 300) == 0.0
+
+
+def test_eko_varningen_tander_bara_nar_utgangen_hors_i_micken():
+    m = _mönster()
+    envs = {1: _kuvert(m), 2: _kuvert(m, förskjutning=3, skala=0.5)}
+    mic = [0.0, 5.0, "Du#2", "Det var väl med den andra kursen, det är det vi kör nu."]
+    ut = [0.0, 5.0, "Mötet#1", "Någonting i början av kursen att det inte kommer vara mer."]
+    träffar, antal = notat.eko_stycken([mic, ut], envs)
+    assert (träffar, antal) == (1, 1), (träffar, antal)
+    # olika ljud samtidigt: ingen varning, och stycket behålls
+    envs[2] = _kuvert([300 * ((i * 7) % 11) for i in range(300)])
+    assert notat.eko_stycken([mic, ut], envs) == (0, 1)
+    assert len(notat.dedupe([mic, ut], envs)) == 2
 
 
 if __name__ == "__main__":

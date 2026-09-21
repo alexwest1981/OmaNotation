@@ -39,11 +39,24 @@ klick = start/stopp, högerklick = öppna mappen med dokumenten.
 enhet som dör (urkopplad USB, upptagen HDMI) inte fäller de andra. På den här maskinen blir
 det sju spår: 3 utgångar + 3 ingångar (Q2U-mic, webbkameramic, line-in).
 
-Samma mening som fångas av flera enheter — två mikrofoner hör samma röst, och hör de
-dessutom högtalarna kommer den en gång till — slås ihop automatiskt. Utgångarnas kopior
-vinner över mikrofonernas (linjeljud slår akustiskt), och vilka enheter som gav ljud står i
-rubriken. `NOTAT_SINK`/`NOTAT_SOURCE` låser inspelningen till exakt två enheter (test, eller
-när du vill välja ljudkort själv).
+Samma ljud som fångas av flera enheter slås ihop genom att **jämföra ljudet**, inte texten
+(whisper skriver olika ord för samma mening beroende på vilken mikrofon som hörde den — mätt
+0,4 i textlikhet för samma sekund). Kuverten jämförs med korrelation och fördröjningssökning;
+den starkaste kopian behålls. På den här maskinen blir det sju spår: 3 utgångar + 3 ingångar
+(Q2U-mic, webbkameramic, line-in).
+
+**Högtalare ger dubbletter som ingen heuristik kan ta bort.** Hör mikrofonen mötets ljud i
+rummet är mikrofonens ljud *inte* en kopia av utgången utan en blandning (din röst + mötet),
+och då står diskussionen två gånger: en gång rent från utgången, en gång inbäddat i
+mikrofonstycket. Dokumentet får då en varning om det, med siffror, i stället för tystnad:
+
+> [!warning] Mötets ljud hördes i rummet (1 av 2 mikrofonstycken är samma ljud som utgången) …
+
+Hörlurar (eller ekodämpning i mötesappen) ger en ren text. Mätt: mikrofon mot utgång ligger på
+0,64–0,70 i korrelation när ljudet hörs i rummet, medan olika ljud samtidigt ligger under 0,3.
+
+`NOTAT_SINK`/`NOTAT_SOURCE` låser inspelningen till exakt två enheter (test, eller när du vill
+välja ljudkort själv).
 
 ## Beroenden
 
@@ -68,7 +81,7 @@ fyllas av påhittad text under pauserna.
 ## Test
 
 ```bash
-python3 test_notat.py          # ren logik: segment, stycken, dubbletter, enheter (13/13)
+python3 test_notat.py          # ren logik: segment, stycken, ljuddubbletter, enheter (14/14)
 bash tools/e2e.sh              # ände-till-ände via virtuell sink (inget ljud i rummet)
 ```
 
