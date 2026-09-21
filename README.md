@@ -12,6 +12,7 @@ och skriver ett dokument i OmaScribe-valvet när du stoppar.
 | `notat start` / `notat stop` | samma sak, uttryckligen |
 | `notat status [--json]` | läget (baren pollar den här) |
 | `notat transcribe <mapp>` | gör om en tidigare inspelning (t.ex. med bättre modell) |
+| `notat stop --no-summary` | hoppa över AI-sammanfattningen |
 | `notat devices` | vilka enheter/modeller/valv som används |
 
 Knappen i Omarchys toppbar (`custom.notat`) gör samma sak som `notat`:
@@ -21,7 +22,12 @@ klick = start/stopp, högerklick = öppna mappen med dokumenten.
 
 - **Dokument:** `<valv>/Inspelningar/Möte ÅÅÅÅ-MM-DD TT-MM.md` (`vault_root` läses ur
   `~/.config/omascribe/config.json`, annars `~/Documents/OmaScribe Vault`).
-  Två spår blir två talare: `Mötet` (ljudutgången) och `Du` (mikrofonen), flätade i tidsordning.
+  Formen: `## Sammanfattning` (översikt i punkter + Beslut/Uppgifter/Nyckelbegrepp),
+  `## Transkription` med talare (`Mötet` = ljudutgången, `Du` = mikrofonen) flätade i
+  tidsordning, och en tom `## Egna anteckningar`.
+  Skrivs i två steg: utskriften först, sammanfattningen ovanpå. Är AI-tjänsten nere eller
+  långsam förlorar du aldrig utskriften — du får en notis i stället.
+  Utskrifter över 16 000 tecken sammanfattas i delar som slås ihop (en timme ≈ 50 000 tecken).
 - **Rå ljud:** `~/.local/share/notat/raw/<tidsstämpel>/{remote,mic}.wav` (16 kHz mono).
   Behålls med flit — `notat transcribe <mapp>` kan göra om dem.
 - **Logg:** `~/.local/share/notat/notat.log` (vem anropade vad, med föräldraprocess).

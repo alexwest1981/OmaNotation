@@ -65,6 +65,31 @@ def test_enheter_kraver_monitor_suffix():
         os.environ.update(old)
 
 
+def test_chunks_delar_pa_styckegrans_utan_att_tappa_text():
+    text = "\n\n".join("x" * 900 for _ in range(20))      # ~18 000 tecken
+    delar = notat.chunks(text, size=16000)
+    assert len(delar) >= 2, len(delar)
+    assert "".join(delar).count("x") == text.count("x"), "text tappades i delningen"
+
+
+def test_summarize_ger_fel_utan_att_kasta():
+    old = os.environ.get("NOTAT_AI_ENDPOINT")
+    os.environ["NOTAT_AI_ENDPOINT"] = "http://127.0.0.1:1/v1"   # stängd port
+    try:
+        txt, err = notat.summarize("Hej. " * 50)
+        assert txt is None and err, (txt, err)
+    finally:
+        os.environ.pop("NOTAT_AI_ENDPOINT", None)
+        if old is not None:
+            os.environ["NOTAT_AI_ENDPOINT"] = old
+
+
+def test_ai_config_foljer_omascribe():
+    endpoint, key, model = notat.ai_config()
+    assert endpoint.startswith("http"), endpoint
+    assert model, "modell saknas"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

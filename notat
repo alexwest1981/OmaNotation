@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.request
 from datetime import datetime
 
 HOME = os.path.expanduser("~")
@@ -204,7 +205,7 @@ def cmd_stop(args):
         log(f"stop avbruten: bara {seconds}s")
         print(json.dumps({"ok": False, "error": "för kort", "seconds": seconds}))
         return 1
-    path = transcribe_dir(sess["dir"], seconds)
+    path = transcribe_dir(sess["dir"], seconds, sammanfatta=not args.get("no-summary"))
     log(f"stop efter {seconds}s -> {path}")
     print(json.dumps({"ok": bool(path), "note": path, "seconds": seconds}))
     return 0 if path else 1
@@ -257,9 +258,85 @@ def mmss(sec):
     return f"{sec // 60:02d}:{sec % 60:02d}"
 
 
-def transcribe_dir(rawdir, seconds):
+# ------------------------------------------------------------------ sammanfattning
+
+SUMMARY_SYS = ("Du sammanfattar utskrifter från möten och föreläsningar på svenska. "
+               "Svara i markdown, kort och konkret, utan inledning eller förklaring av vad du gör.")
+
+
+def ai_config():
+    """AI-inställningarna läses ur OmaScribes config, så de följer hans egna val."""
+    cfg = {}
+    try:
+        with open(OMASCRIBE_CFG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        pass
+    endpoint = os.environ.get("NOTAT_AI_ENDPOINT") or cfg.get("ai_endpoint") or ""
+    key = (os.environ.get("NOTAT_AI_KEY") or cfg.get("ai_key")
+           or os.environ.get("OMNIROUTE_API_KEY") or "")
+    model = os.environ.get("NOTAT_AI_MODEL") or cfg.get("ai_model") or "OmniRoute"
+    return endpoint, key, model
+
+
+def ai_chat(endpoint, key, model, system, user, timeout=180):
+    body = json.dumps({"model": model, "messages": [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user}]}).encode()
+    req = urllib.request.Request(
+        endpoint.rstrip("/") + "/chat/completions", data=body,
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"].strip()
+
+
+def chunks(text, size=16000):
+    """Delar på styckegräns: en timmes föreläsning ryms inte i ett anrop."""
+    out, cur = [], ""
+    for para in text.split("\n\n"):
+        if cur and len(cur) + len(para) > size:
+            out.append(cur)
+            cur = ""
+        cur += para + "\n\n"
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+def summarize(transcript):
+    """(sammanfattning, fel). Fel får aldrig stoppa dokumentet."""
+    endpoint, key, model = ai_config()
+    if not endpoint:
+        return None, "ingen AI-endpoint konfigurerad"
+    try:
+        parts = chunks(transcript)
+        if len(parts) == 1:
+            txt = ai_chat(endpoint, key, model, SUMMARY_SYS,
+                          "Sammanfatta: kort översikt i 3-5 punkter, sedan 'Beslut', "
+                          "'Uppgifter' och 'Nyckelbegrepp' om sådant nämns.\n\n" + parts[0])
+        else:
+            delar = [ai_chat(endpoint, key, model, SUMMARY_SYS,
+                             f"Detta är del {i} av {len(parts)} av en utskrift. Sammanfatta avsnittet "
+                             "i punkter (ta med beslut, uppgifter, datum, namn).\n\n" + p)
+                     for i, p in enumerate(parts, 1)]
+            txt = ai_chat(endpoint, key, model, SUMMARY_SYS,
+                          "Slå ihop dessa delsammanfattningar till EN: kort översikt i 3-5 punkter, "
+                          "sedan 'Beslut', 'Uppgifter' och 'Nyckelbegrepp'.\n\n" + "\n\n".join(delar))
+        return txt, None
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def transcribe_dir(rawdir, seconds, sammanfatta=True):
     if not os.path.isdir(rawdir):
         sys.exit(f"notat: {rawdir} finns inte")
+    if not seconds:      # omtranskribering: längden finns i filen, inte i någon session
+        r = sh("ffprobe", "-v", "error", "-show_entries", "format=duration",
+               "-of", "csv=p=0", os.path.join(rawdir, "remote.wav"))
+        try:
+            seconds = int(float(r.stdout.strip()))
+        except ValueError:
+            seconds = 0
     model = find_model()
     vad = find_vad()
     tracks = [("remote.wav", "Mötet"), ("mic.wav", "Du")]
@@ -293,6 +370,7 @@ def transcribe_dir(rawdir, seconds):
         lines += ["> [!warning] Transkriberingen är ofullständig", *[f"> {f}" for f in failures], ""]
     if not paras:
         lines += ["_Inget tal hittades i inspelningen._", ""]
+    lines += ["## Transkription", ""]
     for start, _end, who, text in paras:
         lines.append(f"**[{mmss(start)}] {who}:** {text}")
         lines.append("")
@@ -309,6 +387,28 @@ def transcribe_dir(rawdir, seconds):
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     notify("Anteckning klar", f"{os.path.basename(path)} · {len(paras)} stycken")
+
+    # Sammanfattningen hämtas EFTER att dokumentet skrivits: en seg eller död
+    # AI-tjänst får aldrig kosta dig utskriften.
+    if sammanfatta and paras:
+        transcript = "\n".join(f"[{mmss(s)}] {who}: {text}" for s, _e, who, text in paras)
+        log(f"sammanfattar {len(transcript)} tecken via AI ...")
+        txt, err = summarize(transcript)
+        if txt:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    current = f.read()
+                marker = "## Transkription"
+                if marker in current:
+                    head, rest = current.split(marker, 1)
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(head + "## Sammanfattning\n\n" + txt + "\n\n" + marker + rest)
+                log(f"sammanfattning inlagd ({len(txt)} tecken)")
+            except OSError as e:
+                log(f"kunde inte lägga in sammanfattningen: {e}")
+        else:
+            log(f"ingen sammanfattning: {err}")
+            notify("Ingen sammanfattning", err or "okänt fel")
     return path
 
 
@@ -322,7 +422,7 @@ def cmd_transcribe(args):
             meta = json.load(f)
     except Exception:
         pass
-    print(transcribe_dir(rawdir, meta.get("seconds", 0)))
+    print(transcribe_dir(rawdir, meta.get("seconds", 0), sammanfatta=not args.get("no-summary")))
     return 0
 
 
