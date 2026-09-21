@@ -115,7 +115,9 @@ whisper-segment *innan* styckena slås ihop — annars kan ett stycke spänna fl
 etiketten blir en gissning. `notat diar-hamta` hämtar modellerna (install.sh gör det åt dig).
 
 - Vet du hur många som deltar: sätt `"antal_talare": 3` i config — det är mer träffsäkert än
-  automatiken. Annars hittas antalet med tröskeln 0,8 (`NOTAT_DIAR_TRÖSKEL`).
+  automatiken. Annars hittas antalet med tröskeln 0,8 (`NOTAT_DIAR_TRÖSKEL`); ett svep 0,6–0,95
+  mot ett tvåtalarsprov med 16 kända turer gav 100 % rätt turer för 0,7–0,95 och 88 % för 0,6 —
+  plattån är bred, och för låg tröskel spricker rösterna upp i stället för att slås ihop.
 - **Mätt:** på ett eget prov med två svenska röster och 16 kända turbyten gav automatiken
   **16/16 rätt talare i turordning**. På en riktig 58 s-inspelning från ett rum hittade den fyra
   röster i en diskussion som låter som två–tre: auto-läget är trubbigare på rummel.
