@@ -68,6 +68,21 @@ def find_vad():
 
 
 SKIP_HINTS = ("null", "notat_test", "dummy")
+CONFIG = os.path.join(HOME, ".config/notat/config.json")
+UTESLUTNA = []      # fylls av device_list(): enheter som hoppats över, så det syns
+
+
+def notat_config():
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def utesluten(node, desc, mönster):
+    text = f"{node} {desc}".lower()
+    return any(m.lower() in text for m in mönster)
 
 
 def pactl_json(kind):
@@ -99,14 +114,25 @@ def device_list():
         remote = sink if sink.endswith(".monitor") else sink + ".monitor"
         return [("ut", remote, "Mötet", "vald utgång"), ("in", source, "Du", "vald ingång")]
     tracks = []
+    mönster = notat_config().get("uteslut") or []
     for s in pactl_json("sinks"):
         name = (s.get("name") or "").strip()
-        if name and not any(h in name.lower() for h in SKIP_HINTS):
-            tracks.append(("ut", name + ".monitor", "Mötet", clean_desc(s.get("description")) or name))
+        desc = clean_desc(s.get("description")) or name
+        if not name or any(h in name.lower() for h in SKIP_HINTS):
+            continue
+        if utesluten(name, desc, mönster):
+            UTESLUTNA.append(f"{desc} (utgång)")
+            continue
+        tracks.append(("ut", name + ".monitor", "Mötet", desc))
     for s in pactl_json("sources"):
         name = (s.get("name") or "").strip()
-        if name and ".monitor" not in name and not any(h in name.lower() for h in SKIP_HINTS):
-            tracks.append(("in", name, "Du", clean_desc(s.get("description")) or name))
+        desc = clean_desc(s.get("description")) or name
+        if not name or ".monitor" in name or any(h in name.lower() for h in SKIP_HINTS):
+            continue
+        if utesluten(name, desc, mönster):
+            UTESLUTNA.append(f"{desc} (ingång)")
+            continue
+        tracks.append(("in", name, "Du", desc))
     if not tracks:
         sys.exit("notat: hittar inga ljudenheter (pactl -f json list sinks/sources)")
     return tracks
@@ -663,8 +689,11 @@ def cmd_status(args):
 
 
 def cmd_devices(_args):
+    enheter = device_list()
     print(json.dumps({"enheter": [{"typ": k, "nod": n, "talare": l, "beskrivning": d}
-                                  for k, n, l, d in device_list()],
+                                  for k, n, l, d in enheter],
+                      "uteslutna": UTESLUTNA,
+                      "config": CONFIG,
                       "model": find_model(), "vad": find_vad(),
                       "vault": os.path.join(vault_root(), VAULT_FOLDER)},
                      ensure_ascii=False, indent=2))

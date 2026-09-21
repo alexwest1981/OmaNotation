@@ -4,8 +4,10 @@
   python3 test_notat.py     (0 = allt ok)
 """
 import importlib.util
+import json
 import os
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_loader("notat", importlib.machinery.SourceFileLoader("notat", os.path.join(HERE, "notat")))
@@ -160,6 +162,27 @@ def test_eko_varningen_tander_bara_nar_utgangen_hors_i_micken():
     envs[2] = _kuvert([300 * ((i * 7) % 11) for i in range(300)])
     assert notat.eko_stycken([mic, ut], envs) == (0, 1)
     assert len(notat.dedupe([mic, ut], envs)) == 2
+
+
+def test_uteslutning_fran_config():
+    """Webkameramiken ska kunna stängas av i config - och finnas där utan config."""
+    def spår_med(cfg):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(cfg, f)
+            path = f.name
+        gammal, notat.CONFIG = notat.CONFIG, path
+        notat.UTESLUTNA.clear()
+        try:
+            return notat.device_list(), list(notat.UTESLUTNA)
+        finally:
+            notat.CONFIG = gammal
+            os.unlink(path)
+
+    med, uteslutna = spår_med({"uteslut": ["WCAM110BK"]})
+    assert not any("WCAM" in f"{t[1]} {t[3]}" for t in med), med
+    assert any("WCAM" in u for u in uteslutna), uteslutna
+    utan, _ = spår_med({"uteslut": []})
+    assert any("WCAM" in f"{t[1]} {t[3]}" for t in utan), utan     # annars vore provet tomt
 
 
 if __name__ == "__main__":

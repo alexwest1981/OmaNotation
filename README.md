@@ -65,6 +65,18 @@ välja ljudkort själv).
 - **VAD-modell** `ggml-silero-v5.1.2.bin` i `~/.local/share/notat/models/` — inte valfritt, se nedan.
 - `ffmpeg`, `pactl`, `pw-play` (test), PipeWire.
 
+## Enheter du inte vill spela in
+
+`~/.config/notat/config.json`:
+
+```json
+{ "uteslut": ["WCAM110BK", "XHT-231205"] }
+```
+
+Namn eller beskrivning som innehåller något av mönstren hoppas över (skiftlägesoberoende).
+`notat devices` listar dem under `uteslutna`, så det syns vad som valts bort i stället för att
+försvinna tyst. Mönstren gäller både utgångar och ingångar.
+
 Miljövariabler: `NOTAT_MODEL_DIR`, `NOTAT_LANG` (default `auto`), `NOTAT_SINK`, `NOTAT_SOURCE`.
 
 ## Mätt på den här maskinen
@@ -81,7 +93,7 @@ fyllas av påhittad text under pauserna.
 ## Test
 
 ```bash
-python3 test_notat.py          # ren logik: segment, stycken, ljuddubbletter, enheter (14/14)
+python3 test_notat.py          # ren logik: segment, stycken, ljuddubbletter, enheter (15/15)
 bash tools/e2e.sh              # ände-till-ände via virtuell sink (inget ljud i rummet)
 ```
 
