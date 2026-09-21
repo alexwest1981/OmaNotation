@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "custom.notat",
+  "name": "Notat",
+  "version": "1.0.0",
+  "author": "Alex Weström",
+  "description": "Spela in möten och föreläsningar (båda ljudsidorna) och få ett dokument i OmaScribe av dem.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Notat",
+    "description": "Spela in möten och föreläsningar och få ett dokument av dem.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

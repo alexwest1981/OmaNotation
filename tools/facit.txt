@@ -1,0 +1,11 @@
+Idag ska vi prata om systemarkitektur och hur man delar upp ett system i lager. Först och främst: en arkitektur beskriver vilka delar ett system består av, hur de kommunicerar och vilka regler som gäller för ändringar. Vi börjar med tre vanliga mönster: lagerarkitektur, händelsedriven arkitektur och mikrotjänster.
+
+I lagerarkitekturen lägger man presentation, affärslogik och dataåtkomst i separata lager. Regeln är att ett lager bara får prata med lagret närmast under sig. Fördelen är att varje lager kan testas för sig. Nackdelen är att en ändring ofta måste gå genom flera lager.
+
+Händelsedriven arkitektur bygger på att komponenter skickar meddelanden i stället för att anropa varandra direkt. Tänk dig en butik: när en order skapas publiceras händelsen order_skapad, och lagret, faktureringen och e-postutskicket lyssnar var för sig. Det ger lös koppling, men det blir svårare att följa ett ärende genom systemet.
+
+Mikrotjänster delar upp systemet i små tjänster som var och en äger sin egen data. Varje tjänst kan driftsättas separat, men du får i stället bekymmer med nätverk, övervakning och transaktioner som spänner över flera tjänster.
+
+Sedan har vi prestanda. En vanlig fråga är hur många förfrågningar per sekund en tjänst klarar. Om en förfrågan tar femtio millisekunder i genomsnitt klarar en instans ungefär tjugo förfrågningar per sekund. Skalar vi ut till åtta instanser kommer vi upp i etthundrasextio.
+
+Till sist: dokumentation. Ett beslut utan motivering är värdelöst om sex månader. Skriv därför alltid ner vilket problem du löste, vilka alternativ du övervägde och varför du valde det du valde. Tack för mig, och lycka till med inlämningen på fredag.
