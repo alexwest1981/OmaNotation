@@ -85,8 +85,13 @@ med känd text (272 ord, `tools/jamfor.py tools/facit.wav tools/facit.txt`) på 
 
 Samma slutsats på en riktig inspelning från ett rum (58 s, ingen facit): kb-whisper-small gav
 den renaste texten utan påhittade ord, medan medium tappade de första ~25 orden och large
-skrev "Tekniskt sett" där small hörde rätt. **Byter du modell: mät själv** med
-`tools/jamfor.py` mot ett eget facit — siffrorna ovan gäller den här maskinen och den här typen av tal.
+skrev "Tekniskt sett" där small hörde rätt.
+
+Ett andra facit (143 s föreläsning, 342 ord, annat ljud) gav samma rangordning:
+kb-whisper-small **7,0 %** · kb-whisper-large 7,6 % · openai-small 11,4 %.
+
+**Byter du modell: mät själv** med `tools/jamfor.py` mot ett eget facit — siffrorna ovan gäller
+den här maskinen och den här typen av tal.
 
 ## Var sakerna hamnar
 
