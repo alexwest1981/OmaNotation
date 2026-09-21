@@ -60,6 +60,13 @@ Samma ljud fångat av flera enheter slås ihop genom att **jämföra ljudet, int
 mätt 0,4 i textlikhet för samma sekund). Kuverten jämförs med korrelation och
 fördröjningssökning, och den starkaste kopian behålls.
 
+Styckesgränserna glider några sekunder mellan enheterna — whisper lägger samma mening på
+t.ex. 46–48 s i ena spåret och 48–52 s i det andra (mätt). Paren matchas därför på **närhet i
+tid**, och jämförelsen görs mot den andra enhetens ljud vid *samma* tidpunkt: 0,99 för samma
+mening, mot 0,57 med den gamla jämförelsen där dubbletten gick igenom. Att i stället jämföra
+ett gemensamt fönster duger inte — bär båda spåren samma ljud korrelerar vilket fönster som
+helst (mätt 0,99 även för två stycken 20 sekunder isär), så hela mötet skulle slås ihop.
+
 **Högtalare ger dubbletter som ingen heuristik kan ta bort.** Hör mikrofonen mötets ljud i
 rummet är mikrofonens ljud inte en kopia av utgången utan en blandning (din röst + mötet),
 och då står diskussionen två gånger. Dokumentet får en varning om det, med siffror:

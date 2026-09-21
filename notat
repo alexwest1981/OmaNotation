@@ -14,6 +14,7 @@
   notat transcribe <mapp>   transkribera en tidigare inspelning igen
   notat devices    visa vilka enheter som används (och vilka som valts bort)
 """
+import bisect
 import json
 import os
 import re
@@ -761,7 +762,7 @@ def track_no(par):
         return 0
 
 
-def dedupe(paras, envs, ratio=0.85, overlap_frac=0.5):
+def dedupe(paras, envs, ratio=0.85, slack=8.0):
     """Samma ljud fångat av flera enheter ska inte stå flera gånger.
 
     Texten duger inte som mått: whisper skriver olika ord för samma mening beroende på
@@ -769,6 +770,18 @@ def dedupe(paras, envs, ratio=0.85, overlap_frac=0.5):
     början av kursen" - 0,4 i textlikhet för samma sekund). Kuverten däremot är samma
     ljud. Den starkaste kopian behålls - linjeljudet ligger högst när mötet hörs i
     högtalarna, din egen mikrofon när du pratar.
+
+    Mätt två gånger om, för den här funktionen har två fällor:
+
+    - **Styckesgränserna glider mellan enheter.** Whisper lägger samma mening några
+      sekunder olika på olika spår (mätt: "ut 46-48 s" mot "mic 48-52 s" för samma
+      mening). Att jämföra bara den tid båda styckena *påstår* att de täcker gav 0,57
+      och dubbletten gick igenom. Därför avgör närheten i tid (slack) om paret är samma
+      händelse, och sedan jämförs den ena enhetens tidsfönster mot den andras ljud vid
+      *samma* tidpunkt (0,99 - dubbletten hittas).
+    - **Unionen av de två fönstren duger inte som jämförelse.** När båda spåren bär
+      samma ljud ger vilket gemensamt fönster som helst 0,99, även för två stycken 20
+      sekunder isär - allt skulle slås ihop. Fönstret måste vara den ena enhetens eget.
     """
     def nivå(par):
         env, hop = envs.get(track_no(par), (None, 0))
@@ -777,29 +790,40 @@ def dedupe(paras, envs, ratio=0.85, overlap_frac=0.5):
         seg = env[int(par[0] / hop):int(par[1] / hop)] or [0]
         return sum(seg) / len(seg)
 
-    keep = []
-    for p in paras:
-        duplikat = None
-        for q in keep:
-            if track_no(p) == track_no(q):           # samma enhet -> aldrig dubblett
-                continue
-            kortast = min(p[1] - p[0], q[1] - q[0])
-            if kortast <= 0 or min(p[1], q[1]) - max(p[0], q[0]) < overlap_frac * kortast:
-                continue
-            envp, hopp = envs.get(track_no(p), (None, 0))
-            envq, hopq = envs.get(track_no(q), (None, 0))
-            if not envp or not envq or hopp != hopq:
-                continue
-            a = envp[int(p[0] / hopp):int(p[1] / hopp)]
-            b = envq[int(q[0] / hopq):int(q[1] / hopq)]
-            if korr(a, b) >= ratio:
-                duplikat = q
+    def samma_ljud(p, q):
+        if abs(p[0] - q[0]) > slack or p[1] <= p[0]:
+            return False
+        envp, hopp = envs.get(track_no(p), (None, 0))
+        envq, hopq = envs.get(track_no(q), (None, 0))
+        if not envp or not envq or hopp != hopq:
+            return False
+        a = envp[int(p[0] / hopp):int(p[1] / hopp)]
+        b = envq[int(p[0] / hopq):int(p[1] / hopq)]     # samma tid, andra enheten
+        return korr(a, b) >= ratio
+
+    # Starkast först: då är det alltid den starkaste kopian som blir kvar, och listan över
+    # behållna stycken behöver bara växa (sorterad på starttid, bisect hittar kandidaterna).
+    # Utan tidssorteringen hade varje stycke jämförts med alla (en timmes möte med
+    # talaruppdelning blir tusentals stycken).
+    keep, start = [], []
+    for p in sorted(paras, key=lambda x: -nivå(x)):
+        dubblett = False
+        for q in keep[bisect.bisect_left(start, p[0] - slack):]:
+            if q[0] - p[0] > slack:
                 break
-        if duplikat is None:
-            keep.append(p)
-        elif nivå(p) > nivå(duplikat):
-            keep[keep.index(duplikat)] = p
-    keep.sort(key=lambda p: p[0])
+            if track_no(p) == track_no(q):               # samma enhet -> aldrig dubblett
+                continue
+            if samma_ljud(p, q):
+                dubblett = True
+                break
+        if not dubblett:
+            i = bisect.bisect_left(start, p[0])
+            keep.insert(i, p)
+            start.insert(i, p[0])
+    # Samma starttid är vanligt när två enheter delar ett stycke: då avgör spårnumret så
+    # ordningen blir densamma varje gång (stabil sortering räckte inte när styckena läggs
+    # in starkast-först).
+    keep.sort(key=lambda p: (p[0], track_no(p)))
     return keep
 
 

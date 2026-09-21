@@ -7,6 +7,8 @@ PROV=${PROV:-}
 
 MOD=$(pactl load-module module-null-sink sink_name=notat_test sink_properties=device.description=notat_test)
 export NOTAT_SINK=notat_test NOTAT_SOURCE=notat_test.monitor
+# provkörningen skriver i ett eget valv om NOTAT_VAULT är satt (annars Alex riktiga)
+VALV="${NOTAT_VAULT:-$HOME/Documents/OmaScribe Vault}"
 
 fail=0
 notat start || fail=1
@@ -18,10 +20,10 @@ notat status --json
 pactl unload-module "$MOD"
 unset NOTAT_SINK NOTAT_SOURCE
 
-ny=$(ls -t "$HOME/Documents/OmaScribe Vault/Inspelningar/"*.md 2>/dev/null | head -1)
+ny=$(ls -t "${VALV:-$HOME/Documents/OmaScribe Vault}"/Inspelningar/*.md 2>/dev/null | head -1)
 if [ -z "$ny" ]; then echo "FAIL: inget dokument skapades"; exit 1; fi
 echo "dokument: $ny"
 grep -q "Inget tal hittades" "$ny" && { echo "FAIL: inget tal hittades i inspelningen"; fail=1; }
-grep -qE "\[[0-9]{2}:[0-9]{2}\] (Mötet|Du):" "$ny" || { echo "FAIL: dokumentet saknar transkription"; fail=1; }
+grep -qE "\[[0-9]{2}:[0-9]{2}\] (Mötet|Du|Deltagare [0-9]+):" "$ny" || { echo "FAIL: dokumentet saknar transkription"; fail=1; }
 [ "$fail" = 0 ] && echo "OK"
 exit $fail

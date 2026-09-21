@@ -135,6 +135,31 @@ def test_dedupe_slar_ihop_samma_ljud_fran_flera_enheter():
     assert kvar[1][2] == "Du#3", kvar             # olikt ljud behålls
 
 
+def test_dedupe_hittar_dubblett_aven_nar_styckesgranserna_skiljer():
+    """Styckesgränserna glider mellan enheter: whisper lade samma mening på 46-48 s i ena
+    spåret och 48-52 s i det andra (mätt i en riktig körning). Jämfördes bara den tid båda
+    *påstod* att de täckte gav det 0,57 och dubbletten gick igenom."""
+    m = _mönster(4000)
+    envs = {1: _kuvert(m), 2: _kuvert(m, skala=0.4)}
+    p = [46.0, 48.0, "Mötet#1", "Hem, men blir inte svårt att testa då."]
+    q = [48.0, 52.0, "Du#2", "Men blir inte svårt att testa då. Vi kanske ska köra händelser."]
+    kvar = notat.dedupe([p, q], envs)
+    assert len(kvar) == 1, kvar
+    assert kvar[0][2] == "Mötet#1", kvar          # starkaste kopian (1,0 mot 0,4) behålls
+
+
+def test_dedupe_slar_inte_ihop_olika_tider_trots_samma_ljud():
+    """Fällan som dödade första försöket: när båda spåren bär samma ljud korrelerar *vilket*
+    gemensamt fönster som helst (mätt 0,99 även för stycken 20 s isär). Jämförelsefönstret
+    måste vara den ena enhetens eget, annars slås hela mötet ihop."""
+    m = _mönster(4000)
+    envs = {1: _kuvert(m), 2: _kuvert(m, skala=0.4)}
+    p = [10.0, 14.0, "Mötet#1", "Då tar jag gränssnittet och testerna."]
+    q = [30.0, 34.0, "Du#2", "Just det, en sak till om kravspecifikationen."]
+    kvar = notat.dedupe([p, q], envs)
+    assert len(kvar) == 2, kvar
+
+
 def test_dedupe_ror_inte_olika_ljud_samtidigt():
     """Två personer samtidigt på olika enheter ska båda vara kvar."""
     envs = {1: _kuvert(_mönster()), 2: _kuvert([300 * ((i * 7) % 11) for i in range(300)])}
