@@ -11,7 +11,19 @@ spec = importlib.util.spec_from_loader("notat", importlib.machinery.SourceFileLo
 notat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(notat)
 
-RAW = sys.argv[1] if len(sys.argv) > 1 else "/home/alex/.local/share/notat/raw/2026-09-21 10-39"
+RAWROT = os.path.join(os.path.expanduser("~"), ".local/share/notat/raw")
+
+
+def senaste():
+    if not os.path.isdir(RAWROT):
+        return ""
+    mappar = [os.path.join(RAWROT, d) for d in os.listdir(RAWROT)]
+    return max(mappar, key=os.path.getmtime) if mappar else ""
+
+
+RAW = sys.argv[1] if len(sys.argv) > 1 else senaste()
+if not RAW or not os.path.isdir(RAW):
+    sys.exit(f"användning: {sys.argv[0]} <mapp med session.json>   (inga inspelningar i {RAWROT})")
 meta = json.load(open(os.path.join(RAW, "session.json"), encoding="utf-8"))
 
 envs, text = {}, {}

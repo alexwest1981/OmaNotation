@@ -185,6 +185,88 @@ def test_uteslutning_fran_config():
     assert any("WCAM" in f"{t[1]} {t[3]}" for t in utan), utan     # annars vore provet tomt
 
 
+def test_valj_slar_av_och_pa_en_enhet():
+    """Väljaren i baren skriver till config - och av/på måste gå att vända."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"uteslut": ["provsink"]}, f)
+        path = f.name
+    gammal, notat.CONFIG = notat.CONFIG, path
+    try:
+        alla = notat.enheter_alla()
+        d = next((x for x in alla if "hdmi" in x["nod"]), None)
+        assert d is not None, "hittar ingen hdmi-enhet att prova med"
+        assert d["vald"] is True, d
+
+        assert notat.cmd_valj({"_": [d["nod"]]}) == 0          # slå av
+        d2 = next(x for x in notat.enheter_alla() if x["nod"] == d["nod"])
+        assert d2["vald"] is False, d2
+        assert not any(t[1] == d["nod"] for t in notat.device_list()), "utesluten enhet valdes ändå"
+
+        assert notat.cmd_valj({"_": [d["nod"]]}) == 0          # slå på igen
+        d3 = next(x for x in notat.enheter_alla() if x["nod"] == d["nod"])
+        assert d3["vald"] is True, d3
+        assert any(t[1] == d["nod"] for t in notat.device_list())
+
+        assert notat.cmd_valj({"_": ["finns-inte"]}) == 1      # okänd enhet ska inte tysta skriva
+        assert notat.cmd_valj({"_": []}) == 0                  # notat valj alla
+        assert notat.notat_config().get("uteslut") == [], notat.notat_config()
+    finally:
+        notat.CONFIG = gammal
+        os.unlink(path)
+
+
+def test_modellkatalog_val_och_nedladdning():
+    """Barens modellmeny: katalogen, valet, och vägran när filen inte finns."""
+    import shutil
+    tmp = tempfile.mkdtemp()
+    rot = os.path.join(tmp, "modeller")
+    os.makedirs(os.path.join(rot, "kb-whisper-large"))
+    with open(os.path.join(rot, "kb-whisper-large", "ggml-model.bin"), "wb") as f:
+        f.write(b"x")
+    cfgp = os.path.join(tmp, "config.json")
+    with open(cfgp, "w", encoding="utf-8") as f:
+        json.dump({}, f)
+    gammal_rot, gammal_cfg = notat.MODEL_ROOT, notat.CONFIG
+    notat.MODEL_ROOT, notat.CONFIG = rot, cfgp
+    try:
+        for m in notat.MODELLER:      # en trasig rad i katalogen = död nedladdningsknapp
+            assert m["url"].startswith("https://") and m["url"].endswith(".bin"), m
+            assert m["fil"].endswith(".bin") and m["mb"] > 0 and m["namn"], m
+        kat = {m["id"]: m for m in notat.modell_katalog()}
+        assert kat["kb-whisper-large"]["finns"] is True, kat["kb-whisper-large"]
+        assert kat["kb-whisper-small"]["finns"] is False, kat["kb-whisper-small"]
+
+        assert notat.cmd_modell({"_": ["kb-whisper-small"]}) == 1      # inte nedladdad
+        assert notat.notat_config().get("modell") in (None, ""), "valde en modell som saknas"
+        assert notat.cmd_modell({"_": ["finns-inte"]}) == 1            # okänt id
+
+        assert notat.cmd_modell({"_": ["kb-whisper-large"]}) == 0
+        assert notat.notat_config()["modell"] == "kb-whisper-large"
+        assert notat.find_model() == os.path.join(rot, "kb-whisper-large", "ggml-model.bin")
+        assert kat["kb-whisper-large"]["sökväg"]
+        assert notat.modell_namn(notat.find_model()) == "kb-whisper-large"
+
+        assert notat.cmd_hamta({"_": ["kb-whisper-large"]}) == 0       # redan hemma
+        assert notat.cmd_hamta({"_": ["finns-inte"]}) == 1             # inget nätanrop
+    finally:
+        notat.MODEL_ROOT, notat.CONFIG = gammal_rot, gammal_cfg
+        shutil.rmtree(tmp)
+
+
+def test_modellernas_url_ger_en_fil():
+    """Nätprov (NOTAT_NATVERK=1): varje nedladdningsknapp måste peka på en riktig fil."""
+    if os.environ.get("NOTAT_NATVERK") != "1":
+        return
+    import urllib.request
+    for m in notat.MODELLER:
+        req = urllib.request.Request(m["url"], method="HEAD",
+                                     headers={"User-Agent": "notat/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            mb = int(r.headers.get("Content-Length") or 0) >> 20
+            assert r.status == 200 and mb > 100, f"{m['id']}: {r.status} {mb} MB"
+            assert abs(mb - m["mb"]) < max(200, m["mb"] * 0.3), f"{m['id']}: katalogen säger {m['mb']} MB, filen är {mb} MB"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

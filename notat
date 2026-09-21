@@ -5,8 +5,12 @@
   notat start      starta inspelning
   notat stop       stoppa, transkribera, skriv dokument
   notat status     --json för baren
+  notat valj <nod> slå av/på en enhet (notat valj alla = allt på)
+  notat modeller   visa modellerna och vilken som är vald
+  notat modell <id>      välj modell (måste vara nedladdad)
+  notat hamta <id>       ladda ner en modell (procent per rad)
   notat transcribe <mapp>   transkribera en tidigare inspelning igen
-  notat devices    visa vilka enheter som används
+  notat devices    visa vilka enheter som används (och vilka som valts bort)
 """
 import json
 import os
@@ -26,12 +30,36 @@ SESSION = os.path.join(STATE, "session.json")
 LOG = os.path.join(HOME, ".local/share/notat/notat.log")
 RAW_ROOT = os.path.join(HOME, ".local/share/notat/raw")
 WHISPER = shutil.which("whisper-cli") or os.path.join(HOME, ".local/bin/whisper-cli")
+MODEL_ROOT = os.path.join(HOME, ".local/share/notat/models")
 MODEL_DIRS = [
     os.environ.get("NOTAT_MODEL_DIR", ""),
-    os.path.join(HOME, ".local/share/notat/models"),
+    MODEL_ROOT,
     os.path.join(HOME, "Work/novacut/models"),
 ]
-FOLDERS = ["small", "base", "tiny"]          # kvalitet först; small mätt bättre än base på svenska
+FOLDERS = ["small", "base", "tiny"]          # reserv om inget val gjorts i baren
+
+# Modellkatalogen: vad baren erbjuder. 'fil' letas i MODEL_ROOT/<id>/ för nedladdade
+# modeller, annars i MODEL_DIRS (whisper.cpp:s egna namn) för de som redan finns.
+MODELLER = [
+    {"id": "kb-whisper-large", "namn": "KB-Whisper large (svenska)", "fil": "ggml-model.bin",
+     "mb": 3100, "beskrivning": "Bäst på svenska. Långsammast.",
+     "url": "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model.bin"},
+    {"id": "kb-whisper-large-q5", "namn": "KB-Whisper large q5 (svenska)", "fil": "ggml-model-q5_0.bin",
+     "mb": 1100, "beskrivning": "Nästan lika bra, tredjedelen så stor.",
+     "url": "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model-q5_0.bin"},
+    {"id": "kb-whisper-medium", "namn": "KB-Whisper medium (svenska)", "fil": "ggml-model.bin",
+     "mb": 1500, "beskrivning": "Mellanklass på svenska.",
+     "url": "https://huggingface.co/KBLab/kb-whisper-medium/resolve/main/ggml-model.bin"},
+    {"id": "kb-whisper-small", "namn": "KB-Whisper small (svenska)", "fil": "ggml-model.bin",
+     "mb": 466, "beskrivning": "Snabb, ändå bättre än OpenAI small på svenska.",
+     "url": "https://huggingface.co/KBLab/kb-whisper-small/resolve/main/ggml-model.bin"},
+    {"id": "openai-small", "namn": "OpenAI small (flerspråkig)", "fil": "ggml-small.bin",
+     "mb": 466, "beskrivning": "Standardmodellen som ligger i systemet.",
+     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"},
+    {"id": "openai-large-v3-turbo", "namn": "OpenAI large-v3-turbo (flerspråkig)", "fil": "ggml-large-v3-turbo.bin",
+     "mb": 1600, "beskrivning": "Snabb stor modell för engelska möten.",
+     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"},
+]
 VAD_NAMES = ["ggml-silero-v5.1.2.bin", "ggml-silero-v5.0.0.bin"]
 LANG = os.environ.get("NOTAT_LANG", "auto")
 OMASCRIBE_CFG = os.path.join(HOME, ".config/omascribe/config.json")
@@ -45,7 +73,39 @@ def sh(*args, **kw):
     return subprocess.run(args, capture_output=True, text=True, **kw)
 
 
+def modell_sökväg(mid):
+    """Var ligger modellen? Nedladdade ligger i MODEL_ROOT/<id>/, systemets i MODEL_DIRS."""
+    m = next((x for x in MODELLER if x["id"] == mid), None)
+    if not m:
+        return None
+    p = os.path.join(MODEL_ROOT, mid, m["fil"])
+    if os.path.exists(p):
+        return p
+    for d in MODEL_DIRS:
+        if d and os.path.exists(os.path.join(d, m["fil"])):
+            return os.path.join(d, m["fil"])
+    return None
+
+
+def modell_katalog():
+    vald = notat_config().get("modell") or ""
+    return [{**m, "finns": bool(modell_sökväg(m["id"])), "vald": m["id"] == vald,
+             "sökväg": modell_sökväg(m["id"])} for m in MODELLER]
+
+
 def find_model():
+    """Vald modell ur config (barens meny), annars NOTAT_MODEL, annars standardordningen."""
+    for nyckel, värde in (("config", notat_config().get("modell")),
+                          ("NOTAT_MODEL", os.environ.get("NOTAT_MODEL"))):
+        if not värde:
+            continue
+        if os.path.exists(värde):
+            return värde
+        p = modell_sökväg(värde)
+        if p:
+            return p
+        sys.exit(f"notat: modellen '{värde}' ({nyckel}) finns inte nedladdad - "
+                 f"öppna källmenyn i baren eller kör: notat hamta {värde}")
     for d in MODEL_DIRS:
         if not d:
             continue
@@ -53,7 +113,85 @@ def find_model():
             p = os.path.join(d, f"ggml-{name}.bin")
             if os.path.exists(p):
                 return p
-    sys.exit("notat: hittar ingen whisper-modell (sätt NOTAT_MODEL_DIR)")
+    sys.exit("notat: hittar ingen whisper-modell (sätt NOTAT_MODEL eller ladda ner en i baren)")
+
+
+def cmd_modeller(_args):
+    print(json.dumps({"modeller": modell_katalog(), "vald": notat_config().get("modell") or "",
+                      "rot": MODEL_ROOT, "nedladdade": os.path.isdir(MODEL_ROOT)},
+                     ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_modell(args):
+    """notat modell <id> - välj modell (måste finnas nedladdad)."""
+    mid = args["_"][0] if args["_"] else ""
+    m = next((x for x in modell_katalog() if x["id"] == mid), None)
+    if m is None:
+        print(json.dumps({"ok": False, "error": f"okänd modell: {mid}"}, ensure_ascii=False))
+        return 1
+    if not m["finns"]:
+        print(json.dumps({"ok": False, "id": mid, "saknas": True, "mb": m["mb"],
+                          "error": f"{m['namn']} är inte nedladdad"}, ensure_ascii=False))
+        return 1
+    cfg = notat_config()
+    cfg["modell"] = mid
+    try:
+        os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+        with open(CONFIG, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        return 1
+    log(f"modell {mid} vald")
+    print(json.dumps({"ok": True, "vald": mid, "sökväg": m["sökväg"]}, ensure_ascii=False))
+    return 0
+
+
+def cmd_hamta(args):
+    """notat hamta <id> - laddar ner modellen och skriver ut en procentsats per rad."""
+    mid = args["_"][0] if args["_"] else ""
+    m = next((x for x in MODELLER if x["id"] == mid), None)
+    if m is None:
+        print(json.dumps({"ok": False, "error": f"okänd modell: {mid}"}, ensure_ascii=False))
+        return 1
+    if modell_sökväg(mid):
+        print(json.dumps({"ok": True, "id": mid, "redan": True, "sökväg": modell_sökväg(mid)},
+                         ensure_ascii=False))
+        return 0
+    dest_dir = os.path.join(MODEL_ROOT, mid)
+    os.makedirs(dest_dir, exist_ok=True)
+    dest, tmp = os.path.join(dest_dir, m["fil"]), os.path.join(dest_dir, m["fil"] + ".del")
+    try:
+        req = urllib.request.Request(m["url"], headers={"User-Agent": "notat/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+            total = int(r.headers.get("Content-Length") or 0)
+            klart, nästa = 0, 0
+            while True:
+                bit = r.read(1 << 20)
+                if not bit:
+                    break
+                f.write(bit)
+                klart += len(bit)
+                p = int(klart * 100 / total) if total else 0
+                if p >= nästa:
+                    print(json.dumps({"procent": p, "mb": klart >> 20}), flush=True)
+                    nästa = p + 5
+        if os.path.getsize(tmp) < 1_000_000:      # en felsida sparad som modell
+            raise ValueError("filen är för liten - nedladdningen gick fel")
+        os.replace(tmp, dest)
+    except Exception as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        log(f"hamta {mid} misslyckades: {e}")
+        print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+        return 1
+    log(f"hamta {mid} klar ({os.path.getsize(dest) >> 20} MB)")
+    print(json.dumps({"ok": True, "id": mid, "sökväg": dest, "mb": os.path.getsize(dest) >> 20},
+                     ensure_ascii=False))
+    return 0
 
 
 def find_vad():
@@ -98,6 +236,27 @@ def clean_desc(desc):
     return d[len("Monitor of "):].strip() if d.startswith("Monitor of ") else d
 
 
+def enheter_alla():
+    """Alla enheter som går att välja, med vald-flagga (uteslutna listas också)."""
+    mönster = notat_config().get("uteslut") or []
+    ut = []
+    for s in pactl_json("sinks"):
+        name = (s.get("name") or "").strip()
+        if not name or any(h in name.lower() for h in SKIP_HINTS):
+            continue
+        desc = clean_desc(s.get("description")) or name
+        ut.append({"typ": "ut", "nod": name + ".monitor", "talare": "Mötet",
+                   "beskrivning": desc, "vald": not utesluten(name, desc, mönster)})
+    for s in pactl_json("sources"):
+        name = (s.get("name") or "").strip()
+        if not name or ".monitor" in name or any(h in name.lower() for h in SKIP_HINTS):
+            continue
+        desc = clean_desc(s.get("description")) or name
+        ut.append({"typ": "in", "nod": name, "talare": "Du",
+                   "beskrivning": desc, "vald": not utesluten(name, desc, mönster)})
+    return ut
+
+
 def device_list():
     """Varje ljudutgång och varje ljudingång — inte bara standardenheterna.
 
@@ -113,38 +272,62 @@ def device_list():
             sys.exit("notat: pactl svarar inte (PipeWire igång?)")
         remote = sink if sink.endswith(".monitor") else sink + ".monitor"
         return [("ut", remote, "Mötet", "vald utgång"), ("in", source, "Du", "vald ingång")]
+    UTESLUTNA.clear()
     tracks = []
-    mönster = notat_config().get("uteslut") or []
-    for s in pactl_json("sinks"):
-        name = (s.get("name") or "").strip()
-        desc = clean_desc(s.get("description")) or name
-        if not name or any(h in name.lower() for h in SKIP_HINTS):
-            continue
-        if utesluten(name, desc, mönster):
-            UTESLUTNA.append(f"{desc} (utgång)")
-            continue
-        tracks.append(("ut", name + ".monitor", "Mötet", desc))
-    for s in pactl_json("sources"):
-        name = (s.get("name") or "").strip()
-        desc = clean_desc(s.get("description")) or name
-        if not name or ".monitor" in name or any(h in name.lower() for h in SKIP_HINTS):
-            continue
-        if utesluten(name, desc, mönster):
-            UTESLUTNA.append(f"{desc} (ingång)")
-            continue
-        tracks.append(("in", name, "Du", desc))
+    for d in enheter_alla():
+        if d["vald"]:
+            tracks.append((d["typ"], d["nod"], d["talare"], d["beskrivning"]))
+        else:
+            typ = "utgång" if d["typ"] == "ut" else "ingång"
+            UTESLUTNA.append(f"{d['beskrivning']} ({typ})")
     if not tracks:
         sys.exit("notat: hittar inga ljudenheter (pactl -f json list sinks/sources)")
     return tracks
 
 
+def cmd_valj(args):
+    """Slår av/på en enhet i config, eller allt på: notat valj <nod> | notat valj alla"""
+    mål = args["_"][0] if args["_"] else "alla"
+    cfg = notat_config()
+    mönster = list(cfg.get("uteslut") or [])
+    if mål == "alla":
+        cfg["uteslut"] = []
+    else:
+        träff = next((d for d in enheter_alla() if d["nod"] == mål), None)
+        if träff is None:
+            print(json.dumps({"ok": False, "error": f"okänd enhet: {mål}"}, ensure_ascii=False))
+            return 1
+        nyckel = mål[:-len(".monitor")] if mål.endswith(".monitor") else mål
+        text = f"{nyckel} {träff['beskrivning']}".lower()
+        kvar = [m for m in mönster if m.lower() not in text]     # matchande mönster bort
+        # vald = påslagen nu: klicket ska slå AV den
+        cfg["uteslut"] = kvar + [nyckel] if träff["vald"] else kvar
+    try:
+        os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+        with open(CONFIG, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        return 1
+    log(f"valj {mål} -> uteslut={cfg['uteslut']}")
+    print(json.dumps({"ok": True, "uteslut": cfg["uteslut"], "enheter": enheter_alla()},
+                     ensure_ascii=False))
+    return 0
+
+
 def vault_root():
+    """Var dokumenten hamnar: 'valv' i config först, sedan OmaScribes valv, annars egen mapp."""
+    egen = notat_config().get("valv")
+    if egen:
+        return os.path.expanduser(egen)
     try:
         with open(OMASCRIBE_CFG, encoding="utf-8") as f:
-            root = json.load(f).get("vault_root") or VAULT_FALLBACK
+            root = json.load(f).get("vault_root")
+        if root:
+            return root
     except Exception:
-        root = VAULT_FALLBACK
-    return root
+        pass
+    return VAULT_FALLBACK if os.path.isdir(VAULT_FALLBACK) else os.path.join(HOME, "Documents/Anteckningar")
 
 
 def load_session():
@@ -598,7 +781,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     title = f"Möte {stamp}"
     lines = [f"# {title}", "",
              f"**Inspelat:** {when} · {mmss(seconds)} · "
-             f"{'VAD' if vad else 'ingen VAD'} · modell {os.path.basename(model)}", ""]
+             f"{'VAD' if vad else 'ingen VAD'} · modell {modell_namn(model)}", ""]
     if kallor:
         lines += [f"**Källor:** {' · '.join(kallor)}", ""]
     lines += [f"**Rå ljud:** `{rawdir}`", ""]
@@ -655,6 +838,14 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     return path
 
 
+def modell_namn(path):
+    """Modellens namn till dokumentet - filnamnet 'ggml-model.bin' säger ingenting."""
+    for m in MODELLER:
+        if modell_sökväg(m["id"]) == path:
+            return m["id"]
+    return os.path.basename(path)
+
+
 def cmd_transcribe(args):
     rawdir = args["_"][0] if args["_"] else None
     if not rawdir:
@@ -689,9 +880,8 @@ def cmd_status(args):
 
 
 def cmd_devices(_args):
-    enheter = device_list()
-    print(json.dumps({"enheter": [{"typ": k, "nod": n, "talare": l, "beskrivning": d}
-                                  for k, n, l, d in enheter],
+    device_list()          # validerar och fyller UTESLUTNA
+    print(json.dumps({"enheter": enheter_alla(),
                       "uteslutna": UTESLUTNA,
                       "config": CONFIG,
                       "model": find_model(), "vad": find_vad(),
@@ -717,7 +907,9 @@ def main(argv):
         if a.startswith("--"):
             flags[a[2:]] = True
     table = {"start": cmd_start, "stop": cmd_stop, "status": cmd_status,
-             "transcribe": cmd_transcribe, "devices": cmd_devices, "toggle": cmd_toggle}
+             "transcribe": cmd_transcribe, "devices": cmd_devices, "toggle": cmd_toggle,
+             "valj": cmd_valj, "modeller": cmd_modeller, "modell": cmd_modell,
+             "hamta": cmd_hamta}
     if cmd in ("-h", "--help", "help"):
         print(USAGE)
         return 0
