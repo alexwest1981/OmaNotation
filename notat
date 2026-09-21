@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+"""notat - spelar in båda ljudsidorna av ett möte/föreläsning och gör ett dokument av det.
+
+  notat            startar om inget spelas in, stoppar + transkriberar annars
+  notat start      starta inspelning
+  notat stop       stoppa, transkribera, skriv dokument
+  notat status     --json för baren
+  notat transcribe <mapp>   transkribera en tidigare inspelning igen
+  notat devices    visa vilka enheter som används
+"""
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+HOME = os.path.expanduser("~")
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+STATE = os.path.join(RUNTIME, "notat")
+SESSION = os.path.join(STATE, "session.json")
+LOG = os.path.join(HOME, ".local/share/notat/notat.log")
+RAW_ROOT = os.path.join(HOME, ".local/share/notat/raw")
+WHISPER = shutil.which("whisper-cli") or os.path.join(HOME, ".local/bin/whisper-cli")
+MODEL_DIRS = [
+    os.environ.get("NOTAT_MODEL_DIR", ""),
+    os.path.join(HOME, ".local/share/notat/models"),
+    os.path.join(HOME, "Work/novacut/models"),
+]
+FOLDERS = ["small", "base", "tiny"]          # kvalitet först; small mätt bättre än base på svenska
+VAD_NAMES = ["ggml-silero-v5.1.2.bin", "ggml-silero-v5.0.0.bin"]
+LANG = os.environ.get("NOTAT_LANG", "auto")
+OMASCRIBE_CFG = os.path.join(HOME, ".config/omascribe/config.json")
+VAULT_FALLBACK = os.path.join(HOME, "Documents/OmaScribe Vault")
+VAULT_FOLDER = "Inspelningar"
+
+
+# ------------------------------------------------------------------ hjälpare
+
+def sh(*args, **kw):
+    return subprocess.run(args, capture_output=True, text=True, **kw)
+
+
+def find_model():
+    for d in MODEL_DIRS:
+        if not d:
+            continue
+        for name in FOLDERS:
+            p = os.path.join(d, f"ggml-{name}.bin")
+            if os.path.exists(p):
+                return p
+    sys.exit("notat: hittar ingen whisper-modell (sätt NOTAT_MODEL_DIR)")
+
+
+def find_vad():
+    for d in MODEL_DIRS:
+        if not d:
+            continue
+        for name in VAD_NAMES:
+            p = os.path.join(d, name)
+            if os.path.exists(p):
+                return p
+    return None
+
+
+def devices():
+    # NOTAT_SINK / NOTAT_SOURCE pekar om enheterna (test, eller valt ljudkort)
+    sink = os.environ.get("NOTAT_SINK") or sh("pactl", "get-default-sink").stdout.strip()
+    source = os.environ.get("NOTAT_SOURCE") or sh("pactl", "get-default-source").stdout.strip()
+    if not sink or not source:
+        sys.exit("notat: pactl svarar inte (PipeWire igång?)")
+    remote = sink if sink.endswith(".monitor") else sink + ".monitor"
+    # ponytail: enheter låses vid start; byter du ljudkort mitt i får du starta om
+    return remote, source
+
+
+def vault_root():
+    try:
+        with open(OMASCRIBE_CFG, encoding="utf-8") as f:
+            root = json.load(f).get("vault_root") or VAULT_FALLBACK
+    except Exception:
+        root = VAULT_FALLBACK
+    return root
+
+
+def load_session():
+    try:
+        with open(SESSION, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def running(sess):
+    """True om ffmpeg-processen ur sessionen lever."""
+    if not sess:
+        return False
+    pid = sess.get("pid")
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    # pid kan ha återanvänts: kontrollera att det är vår ffmpeg
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return b"ffmpeg" in f.read()
+    except OSError:
+        return False
+
+
+def log(msg):
+    """Liten händelselogg: vem (förälder) gjorde vad - annars går det inte att utreda."""
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        ppid = os.getppid()
+        try:
+            with open(f"/proc/{ppid}/cmdline", "rb") as f:
+                parent = f.read().replace(b"\0", b" ").decode(errors="replace").strip()[:120]
+        except OSError:
+            parent = "?"
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat(timespec='seconds')} {msg} (förälder {ppid}: {parent})\n")
+    except OSError:
+        pass
+
+
+def notify(title, body):
+    if shutil.which("notify-send"):
+        subprocess.Popen(["notify-send", "-a", "notat", title, body])
+
+
+# ------------------------------------------------------------------ start/stopp
+
+def cmd_start(_args):
+    sess = load_session()
+    if running(sess):
+        print(json.dumps({"ok": False, "error": "spelar redan in", "since": sess["started"]}))
+        return 0
+    remote, source = devices()
+    stamp = datetime.now().strftime("%Y-%m-%d %H-%M")
+    outdir = os.path.join(RAW_ROOT, stamp)
+    n = 2
+    while os.path.exists(os.path.join(outdir, "remote.wav")):
+        outdir = os.path.join(RAW_ROOT, f"{stamp}-{n}")   # två inspelningar samma minut
+        n += 1
+    os.makedirs(outdir, exist_ok=True)
+    fflog = open(os.path.join(outdir, "ffmpeg.log"), "w")
+    proc = subprocess.Popen([
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning",
+        "-f", "pulse", "-i", remote,
+        "-f", "pulse", "-i", source,
+        "-map", "0:a", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", os.path.join(outdir, "remote.wav"),
+        "-map", "1:a", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", os.path.join(outdir, "mic.wav"),
+    ], stdout=fflog, stderr=fflog, stdin=subprocess.DEVNULL, start_new_session=True)
+    time.sleep(1.0)
+    if proc.poll() is not None:
+        tail = ""
+        with open(os.path.join(outdir, "ffmpeg.log"), encoding="utf-8", errors="replace") as f:
+            tail = f.read()[-400:]
+        print(json.dumps({"ok": False, "error": "ffmpeg dog vid start: " + tail.strip()}))
+        return 1
+    os.makedirs(STATE, exist_ok=True)
+    with open(SESSION, "w", encoding="utf-8") as f:
+        json.dump({"pid": proc.pid, "started": time.time(), "dir": outdir,
+                   "remote": remote, "source": source}, f)
+    notify("Spelar in", f"{remote}\n+ {source}")
+    log(f"start {outdir} pid={proc.pid} remote={remote} source={source}")
+    print(json.dumps({"ok": True, "dir": outdir, "remote": remote, "source": source}))
+    return 0
+
+
+def stop_ffmpeg(sess):
+    pid = sess["pid"]
+    if running(sess):
+        os.kill(pid, signal.SIGINT)          # ffmpeg skriver klart wav-huvudet
+        for _ in range(100):
+            if not running(sess):
+                break
+            time.sleep(0.1)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    return True
+
+
+def cmd_stop(args):
+    sess = load_session()
+    if not sess:
+        print(json.dumps({"ok": False, "error": "ingen inspelning"}))
+        return 1
+    was_live = running(sess)
+    stop_ffmpeg(sess)
+    seconds = int((sess.get("stopped") or time.time()) - sess["started"]) if not was_live else int(time.time() - sess["started"])
+    try:
+        os.unlink(SESSION)
+    except OSError:
+        pass
+    if seconds < 3 and not args.get("force"):
+        notify("Ingen inspelning", "Kortare än 3 sekunder - inget dokument skapades")
+        log(f"stop avbruten: bara {seconds}s")
+        print(json.dumps({"ok": False, "error": "för kort", "seconds": seconds}))
+        return 1
+    path = transcribe_dir(sess["dir"], seconds)
+    log(f"stop efter {seconds}s -> {path}")
+    print(json.dumps({"ok": bool(path), "note": path, "seconds": seconds}))
+    return 0 if path else 1
+
+
+# ------------------------------------------------------------------ transkribering
+
+def whisper(wav, outbase, model, vad):
+    args = [WHISPER, "-m", model, "-f", wav, "-l", LANG, "-oj", "-of", outbase, "-t", "12", "-nt"]
+    if vad:
+        args += ["--vad", "-vm", vad]
+    r = sh(*args)
+    path = outbase + ".json"
+    if not os.path.exists(path):
+        return None, (r.stderr or r.stdout or "whisper gav ingen utdata").strip()[-400:]
+    with open(path, encoding="utf-8") as f:
+        return json.load(f), None
+
+
+def segments(data, speaker):
+    """whisper-clis JSON -> [(start_sek, slut_sek, talare, text)]"""
+    out = []
+    for seg in (data or {}).get("transcription", []):
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        off = seg.get("offsets") or {}
+        start = (off.get("from") or 0) / 1000.0
+        end = (off.get("to") or 0) / 1000.0
+        if "[" in text or "(musik" in text.lower():     # whisper brusmarkörer
+            continue
+        out.append((start, end, speaker, text))
+    return out
+
+
+def paragraphs(segs, gap=3.0, maxlen=400):
+    """Slår ihop intilliggande rader från samma talare - läsbart dokument."""
+    out = []
+    for start, end, who, text in segs:
+        if out and out[-1][2] == who and start - out[-1][1] < gap and len(out[-1][3]) < maxlen:
+            out[-1][1] = end
+            out[-1][3] += " " + text
+        else:
+            out.append([start, end, who, text])
+    return out
+
+
+def mmss(sec):
+    sec = int(sec)
+    return f"{sec // 60:02d}:{sec % 60:02d}"
+
+
+def transcribe_dir(rawdir, seconds):
+    if not os.path.isdir(rawdir):
+        sys.exit(f"notat: {rawdir} finns inte")
+    model = find_model()
+    vad = find_vad()
+    tracks = [("remote.wav", "Mötet"), ("mic.wav", "Du")]
+    all_segs = []
+    failures = []
+    for wav, who in tracks:
+        p = os.path.join(rawdir, wav)
+        if not os.path.exists(p):
+            continue
+        data, err = whisper(p, os.path.join(rawdir, os.path.splitext(wav)[0]), model, vad)
+        if err:
+            failures.append(f"{who}: {err}")
+            continue
+        all_segs += segments(data, who)
+    all_segs.sort(key=lambda s: s[0])
+    paras = paragraphs(all_segs)
+
+    stamp = os.path.basename(rawdir)
+    try:   # de första 16 tecknen är tidsstämpeln även när mappen fick "-2"-svans
+        when = datetime.strptime(stamp[:16], "%Y-%m-%d %H-%M").strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        when = stamp
+    title = f"Möte {stamp}"
+    lines = [f"# {title}", "",
+             f"**Inspelat:** {when} · {mmss(seconds)} · "
+             f"{'VAD' if vad else 'ingen VAD'} · modell {os.path.basename(model)}", "",
+             f"**Rå ljud:** `{rawdir}`", ""]
+    if not vad:
+        lines += ["> [!warning] Ingen VAD-modell hittad - tysta partier kan bli påhittad text", ""]
+    if failures:
+        lines += ["> [!warning] Transkriberingen är ofullständig", *[f"> {f}" for f in failures], ""]
+    if not paras:
+        lines += ["_Inget tal hittades i inspelningen._", ""]
+    for start, _end, who, text in paras:
+        lines.append(f"**[{mmss(start)}] {who}:** {text}")
+        lines.append("")
+    lines += ["## Egna anteckningar", "", ""]
+    content = "\n".join(lines)
+
+    dest = os.path.join(vault_root(), VAULT_FOLDER)
+    os.makedirs(dest, exist_ok=True)
+    path = os.path.join(dest, f"{title}.md")
+    n = 2
+    while os.path.exists(path):
+        path = os.path.join(dest, f"{title} {n}.md")
+        n += 1
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    notify("Anteckning klar", f"{os.path.basename(path)} · {len(paras)} stycken")
+    return path
+
+
+def cmd_transcribe(args):
+    rawdir = args["_"][0] if args["_"] else None
+    if not rawdir:
+        sys.exit("notat transcribe <mapp med remote.wav/mic.wav>")
+    meta = {}
+    try:
+        with open(os.path.join(rawdir, "session.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:
+        pass
+    print(transcribe_dir(rawdir, meta.get("seconds", 0)))
+    return 0
+
+
+# ------------------------------------------------------------------ status
+
+def cmd_status(args):
+    sess = load_session()
+    live = running(sess)
+    info = {"recording": live, "seconds": 0, "dir": None, "started": None}
+    if sess:
+        info["dir"] = sess.get("dir")
+        info["started"] = datetime.fromtimestamp(sess["started"]).strftime("%H:%M")
+        if live:
+            info["seconds"] = int(time.time() - sess["started"])
+    if args.get("json"):
+        print(json.dumps(info))
+    else:
+        print(f"{'SPELAR IN ' + mmss(info['seconds']) if live else 'spelar inte in'}"
+              + (f"  ({info['dir']})" if live else ""))
+    return 0
+
+
+def cmd_devices(_args):
+    remote, source = devices()
+    print(json.dumps({"remote": remote, "source": source, "model": find_model(),
+                      "vad": find_vad(), "vault": os.path.join(vault_root(), VAULT_FOLDER)},
+                     ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_toggle(_args):
+    sess = load_session()
+    return cmd_stop({}) if running(sess) else cmd_start({})
+
+
+USAGE = __doc__
+
+
+def main(argv):
+    if not argv:
+        return cmd_toggle({})
+    cmd, rest = argv[0], argv[1:]
+    flags = {"_": [a for a in rest if not a.startswith("--")]}
+    for a in rest:
+        if a.startswith("--"):
+            flags[a[2:]] = True
+    table = {"start": cmd_start, "stop": cmd_stop, "status": cmd_status,
+             "transcribe": cmd_transcribe, "devices": cmd_devices, "toggle": cmd_toggle}
+    if cmd in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0
+    if cmd not in table:
+        sys.exit(USAGE)
+    return table[cmd](flags)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
