@@ -38,13 +38,16 @@ cp build/bin/whisper-cli ~/.local/bin/
 | `notat modeller` | modellerna, vilken som är vald och vilka som finns nedladdade |
 | `notat modell <id>` | byt modell |
 | `notat hamta <id>` | ladda ner en modell (procent per rad) |
+| `notat röster på\|av` | skilj talarna åt i dokumentet (Deltagare 1, 2 …) |
+| `notat diar-hamta` | ladda ner talaruppdelningen (~70 MB) |
 | `notat transcribe <mapp>` | gör om en tidigare inspelning (t.ex. med bättre modell) |
 | `notat stop --no-summary` | hoppa över AI-sammanfattningen |
 
 **Bar-knappen** (`custom.notat`, mikrofonikonen): vänsterklick startar/stoppar och visar
-en räknare. **Högerklick** öppnar menyn: vilka enheter som spelas in, vilken modell som
-körs, och en nedladdningsknapp för de modeller som inte finns på disken än. Klick utanför
-stänger menyn. Ändringar i menyn gäller nästa inspelning — en pågående inspelning rörs inte.
+en räknare. **Högerklick** öppnar menyn i tre avsnitt: **Källor att spela in** (slå av/på
+enheter), **Modell** (byt modell, nedladdning sköts automatiskt om den saknas) och
+**Röster** (särskilj talarna). Klick utanför stänger menyn. Ändringar i menyn gäller nästa
+inspelning — en pågående inspelning rörs inte.
 
 ## Var den lyssnar
 
@@ -71,27 +74,46 @@ Vill du hellre styra exakt: `NOTAT_SINK`/`NOTAT_SOURCE` låser inspelningen till
 ## Modeller (mätt, inte gissat)
 
 Whisper-modellerna väljs i bar-menyn eller med `notat modell <id>`. Katalogen innehåller
-KBLab:s svensktränade **KB-Whisper** och OpenAI:s flerspråkiga. Uppmätt på 119 s svenskt tal
-med känd text (272 ord, `tools/jamfor.py tools/facit.wav tools/facit.txt`) på en RTX 3060 Ti:
+KBLab:s svensktränade **KB-Whisper** och OpenAI:s flerspråkiga. Uppmätt på två svenska prov med
+känd text (272 och 342 ord, `tools/jamfor.py`) på en RTX 3060 Ti:
 
-| Modell | Storlek | WER | Fart | Kommentar |
+| Modell | Storlek | Prov 1 (119 s) | Prov 2 (143 s) | Fart |
 |---|---|---|---|---|
-| **kb-whisper-small** | 466 MB | **3,1 %** | 29× realtid | rekommenderas — bäst och snabbast i provet |
-| kb-whisper-medium | 1,5 GB | 4,6 % | 8× | tappade första meningen i provet (både med och utan VAD) |
-| kb-whisper-large-q5 | 1,1 GB | 6,9 % | 10× | |
-| kb-whisper-large | 2,9 GB | 7,3 % | 4–13× | fler ordfel än small i provet; tappar enstaka ord |
-| openai-small | 466 MB | 8,4 % | 31× | flerspråkig, sämre på svenska |
-| openai-large-v3-turbo | 1,6 GB | — | — | flerspråkig, bra för engelska möten |
+| **kb-whisper-small** | 466 MB | **4,2 %** | 5,0 % | 26× realtid |
+| kb-whisper-medium | 1,5 GB | 4,6 % | — | 18× |
+| kb-whisper-large-q5 | 1,1 GB | 6,5 % | — | 8× |
+| kb-whisper-large | 2,9 GB | 6,9 % | **3,8 %** | 11× |
+| openai-small | 466 MB | 8,0 % | 6,7 % | 25× |
 
-Samma slutsats på en riktig inspelning från ett rum (58 s, ingen facit): kb-whisper-small gav
-den renaste texten utan påhittade ord, medan medium tappade de första ~25 orden och large
-skrev "Tekniskt sett" där small hörde rätt.
+Läsningen: de svensktränade KB-Whisper-modellerna slår OpenAI small på båda proven, och
+small/large ligger nära varandra och **byter plats beroende på material** — small är standardvalet
+för farten (26× mot 11×). På prov 1 utelämnade large en hel mening ("Fördelen är att varje lager
+kan testas för sig"), en kvalitetsrisk som WER-siffran döljer.
 
-Ett andra facit (143 s föreläsning, 342 ord, annat ljud) gav samma rangordning:
-kb-whisper-small **7,0 %** · kb-whisper-large 7,6 % · openai-small 11,4 %.
+Mäter du själv: whisper.cpp:s `-nt` (utan tidsstämplar) slår ihop talet till några få klumpar —
+mätt 3 segment på 18–46 s för 110 s tal, mot 24 segment på 1–5 s med tidsstämplar — och flyttar
+WER-siffrorna flera procentenheter. `notat` använder inte flaggan, och `tools/jamfor.py` gör
+detsamma så att siffrorna går att jämföra.
 
-**Byter du modell: mät själv** med `tools/jamfor.py` mot ett eget facit — siffrorna ovan gäller
-den här maskinen och den här typen av tal.
+## Röster: Deltagare 1, 2 …
+
+Växlas i bar-menyn (**Röster → Särskilj röster**) eller med `notat röster på|av`. Din egen
+mikrofon blir alltid **Du**; rösterna i mötets ljud får **Deltagare 1, 2 …** sorterade efter hur
+mycket de pratar (den som pratar mest blir 1). Ett stycke som inte täcks av någon uppmätt tur
+behåller "Mötet" — hellre ärligt tomt än gissat.
+
+Mekaniken är **sherpa-onnx** (statisk binär + ONNX-modeller, ~70 MB, ingen torch, ingen
+molntjänst): pyannote-segmentering + röst-embedding (NeMo TitaNet small). Talaren sätts på varje
+whisper-segment *innan* styckena slås ihop — annars kan ett stycke spänna flera röster och
+etiketten blir en gissning. `notat diar-hamta` hämtar modellerna (install.sh gör det åt dig).
+
+- Vet du hur många som deltar: sätt `"antal_talare": 3` i config — det är mer träffsäkert än
+  automatiken. Annars hittas antalet med tröskeln 0,8 (`NOTAT_DIAR_TRÖSKEL`).
+- **Mätt:** på ett eget prov med två svenska röster och 16 kända turbyten gav automatiken
+  **16/16 rätt talare i turordning**. På en riktig 58 s-inspelning från ett rum hittade den fyra
+  röster i en diskussion som låter som två–tre: auto-läget är trubbigare på rummel.
+- **Kostnad:** cirka 0,2 × inspelningens längd i CPU-tid (en timme ≈ 12 minuter extra) — därför
+  är växeln av/på och står i menyn.
 
 ## Var sakerna hamnar
 
@@ -99,12 +121,15 @@ den här maskinen och den här typen av tal.
   `~/.config/notat/config.json`, annars `vault_root` ur `~/.config/omascribe/config.json`,
   annars `~/Documents/OmaScribe Vault`, annars `~/Documents/Anteckningar`.
   Formen: `## Sammanfattning` (punkter + Beslut/Uppgifter/Nyckelbegrepp), `## Transkription`
-  med talare (`Mötet` = ljudutgången, `Du` = mikrofonen) i tidsordning, och `## Egna anteckningar`.
+  med talare (`Mötet` = ljudutgången, `Du` = mikrofonen, `Deltagare 1, 2 …` när röstväxeln är
+  på) i tidsordning, och `## Egna anteckningar`.
   Utskriften skrivs först, sammanfattningen läggs ovanpå — är AI-tjänsten nere förlorar du
   aldrig utskriften, bara sammanfattningen (du får en notis).
 - **Rå ljud:** `~/.local/share/notat/raw/<tidsstämpel>/*.wav` (16 kHz mono). Behålls med flit —
   `notat transcribe <mapp>` kan göra om dem.
 - **Modeller:** `~/.local/share/notat/models/<id>/`.
+- **Talarskiljning:** `~/.local/share/notat/diar/` (sherpa-onnx-binären och ONNX-modellerna,
+  ~70 MB; `notat diar-hamta` hämtar dem).
 - **Logg:** `~/.local/share/notat/notat.log` (vem anropade vad).
 
 ## Inställningar — `~/.config/notat/config.json`
@@ -113,6 +138,8 @@ den här maskinen och den här typen av tal.
 {
   "uteslut": ["WCAM110BK"],
   "modell": "kb-whisper-small",
+  "röster": true,
+  "antal_talare": 0,
   "valv": "~/Documents/Anteckningar"
 }
 ```
@@ -121,10 +148,13 @@ den här maskinen och den här typen av tal.
   skiftlägesoberoende). `notat devices` listar dem under `uteslutna`, så det syns vad som valts
   bort i stället för att försvinna tyst. Menyn skriver hit.
 - `modell`: vald modell (sätts av menyn).
+- `röster`: skilj talarna åt i dokumentet (menyn växlar).
+- `antal_talare`: 0 = hitta antalet automatiskt; sätt antalet om du vet det.
 - `valv`: var dokumenten hamnar.
 
 Miljövariabler: `NOTAT_MODEL` (sökväg eller id), `NOTAT_MODEL_DIR`, `NOTAT_LANG` (default
-`auto`), `NOTAT_SINK`, `NOTAT_SOURCE`.
+`auto`), `NOTAT_SINK`, `NOTAT_SOURCE`, `NOTAT_VAULT` (överstyr `valv`, bra för provkörningar),
+`NOTAT_DIAR_TRÖSKEL` (klustringströskel, default 0,8).
 
 ## VAD är inte valfritt
 
@@ -135,10 +165,11 @@ Utan VAD-modellen hittar whisper på text i tystnaden. Mätt: 5 minuter digital 
 ## Test
 
 ```bash
-python3 test_notat.py              # ren logik: segment, stycken, ljuddubbletter, enheter, modellval (18/18)
+python3 test_notat.py              # ren logik: segment, stycken, ljuddubbletter, enheter, modellval, talaretiketter (20/20)
 NOTAT_NATVERK=1 python3 test_notat.py   # + att varje nedladdnings-URL ger en riktig fil
 bash tools/e2e.sh                  # ände-till-ände via virtuell sink (inget ljud i rummet)
 python3 tools/jamfor.py tools/facit.wav tools/facit.txt kb-whisper-small   # WER mot känd text
+python3 tools/diarprov.py          # talaruppdelning mot ett syntetiskt tvåtalarsprov (16 turer)
 python3 tools/spar.py              # per spår: nivå och vad whisper hörde (felsökning)
 ```
 
@@ -164,4 +195,6 @@ ffmpeg -i /tmp/f.mp3 -ac 1 -ar 16000 tools/facit.wav
 ## Licens
 
 MIT (se LICENSE). Modellvikterna har egna licenser: KB-Whisper är Apache-2.0 (KBLab,
-Kungliga biblioteket), OpenAI:s Whisper-vikter är MIT. Silero-VAD är MIT.
+Kungliga biblioteket), OpenAI:s Whisper-vikter är MIT. Silero-VAD är MIT. Talarskiljningen
+använder sherpa-onnx (Apache-2.0), pyannote-segmentation-3.0 (MIT) och NVIDIA NeMo TitaNet
+(licensvillkoren står på NGC-modellsidan).

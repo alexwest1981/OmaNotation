@@ -40,6 +40,13 @@ if [ "${1:-}" != "--ingen-modell" ]; then
   "$HOME/.local/bin/notat" modell kb-whisper-small || true
 fi
 
+# 4b. talaruppdelningen (sherpa-onnx + röstmodeller, ~70 MB) - gör att dokumentet kan
+#     skriva "Deltagare 1, 2 ..." i stället för ett enda "Mötet". Ingen torch, ingen molntjänst.
+if [ "${1:-}" != "--ingen-modell" ]; then
+  "$HOME/.local/bin/notat" diar-hamta || echo "kunde inte hämta talaruppdelningen - kör: notat diar-hamta"
+  "$HOME/.local/bin/notat" röster på || true
+fi
+
 # 5. bar-knappen (Omarchy). Måste vara en riktig mapp - validate vägrar symlänkar.
 if [ -d "$HOME/.config/omarchy/plugins" ]; then
   PLUG="$HOME/.config/omarchy/plugins/custom.notat"
@@ -47,7 +54,7 @@ if [ -d "$HOME/.config/omarchy/plugins" ]; then
   cp "$ROT/bar/custom.notat/BarWidget.qml" "$ROT/bar/custom.notat/manifest.json" "$PLUG/"
   omarchy plugin enable custom.notat >/dev/null 2>&1 || true
   omarchy-restart-shell >/dev/null 2>&1 || true
-  echo "bar-knappen installerad (högerklick på mikrofonikonen väljer källor och modell)"
+  echo "bar-knappen installerad (högerklick på mikrofonikonen väljer källor, modell och röster)"
   echo "  uppdatera senare genom att köra ./install.sh igen (filerna kopieras)"
 fi
 

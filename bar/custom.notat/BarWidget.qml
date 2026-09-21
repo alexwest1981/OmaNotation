@@ -20,6 +20,7 @@ BarWidget {
   property bool popupOpen: false
   property var enheter: []           // [{typ, nod, talare, beskrivning, vald}]
   property var modeller: []          // [{id, namn, mb, beskrivning, finns, vald}]
+  property var roster: ({})          // {på, nedladdade, tröskel, antal_talare}
   property string nedladdning: ""    // id som laddas ner just nu
   property int nedladdningProcent: 0
   property string felText: ""
@@ -78,6 +79,20 @@ BarWidget {
     }
   }
 
+  // Röstuppdelningen: växel om modellerna finns, annars laddas de ner först
+  function vaxlaRoster() {
+    if (root.roster.nedladdade === true) {
+      rosterProc.command = [root.bin, "röster", root.roster.på === true ? "av" : "på"]
+      rosterProc.running = true
+    } else if (root.nedladdning === "") {
+      root.felText = ""
+      root.nedladdning = "talaruppdelningen"
+      root.nedladdningProcent = 0
+      hamtaProc.command = [root.bin, "diar-hamta"]
+      hamtaProc.running = true
+    }
+  }
+
   function toggle() {
     if (root.busy) return
     root.busy = true
@@ -87,9 +102,10 @@ BarWidget {
 
   function tooltip() {
     var modell = root.modellNamn ? " · " + root.modellNamn : ""
+    var röst = root.roster.på === true ? " · röster" : ""
     if (root.busy) return "Notat jobbar (transkriberar) …"
-    if (root.recording) return "Spelar in " + root.clock + modell + " — klick stoppar och gör dokument. Högerklick: källor och modell."
-    return "Klick: anteckna mötet/föreläsningen" + modell + ". Högerklick: välj källor och modell."
+    if (root.recording) return "Spelar in " + root.clock + modell + röst + " — klick stoppar och gör dokument. Högerklick: källor, modell och röster."
+    return "Klick: anteckna mötet/föreläsningen" + modell + röst + ". Högerklick: välj källor, modell och röster."
   }
 
   Process {
@@ -125,11 +141,32 @@ BarWidget {
       waitForEnd: true
       onStreamFinished: {
         try {
-          root.enheter = JSON.parse(text.trim()).enheter || []
+          var d = JSON.parse(text.trim())
+          root.enheter = d.enheter || []
+          root.roster = d.röster || ({})
         } catch (e) {
           root.felText = "kunde inte läsa enhetslistan"
         }
       }
+    }
+  }
+
+  Process {
+    id: rosterProc
+    // command sätts i vaxlaRoster() innan running
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          var svar = JSON.parse(text.trim())
+          if (svar.ok === false) root.felText = svar.error || "kunde inte ändra"
+        } catch (e) {
+          root.felText = "oväntat svar från notat röster"
+        }
+      }
+    }
+    onExited: function (code) {
+      root.hamtaEnheter()
     }
   }
 
@@ -407,10 +444,8 @@ BarWidget {
 
       Text {
         width: popCol.width
-        text: root.nedladdning !== ""
-              ? "Laddar ner " + root.nedladdning + " — " + root.nedladdningProcent + " %"
-              : "Klicka för att byta. Saknas modellen laddas den ner först."
-        color: root.nedladdning !== "" ? Color.accent : root.dimFg
+        text: "Klicka för att byta. Saknas modellen laddas den ner först."
+        color: root.dimFg
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
         wrapMode: Text.WordWrap
@@ -503,6 +538,127 @@ BarWidget {
             onClicked: root.valjModell(modelData)
           }
         }
+      }
+
+      Rectangle {
+        width: popCol.width
+        height: 1
+        color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.15)
+      }
+
+      Text {
+        text: "Röster"
+        color: root.fg
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.subtitle
+        font.bold: true
+      }
+
+      Text {
+        width: popCol.width
+        text: "Rösterna i mötet får egna namn (Deltagare 1, 2 …) i stället för ett enda \"Mötet\". "
+              + "Din egen mikrofon är alltid \"Du\". Kostar extra tid: cirka en femtedel av inspelningens längd."
+        color: root.dimFg
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.caption
+        wrapMode: Text.WordWrap
+      }
+
+      Rectangle {
+        width: popCol.width
+        height: Style.space(42)
+        radius: Style.spacing.labelGap
+        color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, root.roster.på ? 0.10 : 0.03)
+        border.width: 1
+        border.color: root.roster.på
+                      ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.55)
+                      : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.12)
+
+        Column {
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.leftMargin: Style.space(8)
+          anchors.rightMargin: Style.space(8)
+          spacing: Style.space(1)
+
+          Row {
+            spacing: Style.space(8)
+
+            Rectangle {
+              width: Style.spaceReal(12)
+              height: Style.spaceReal(12)
+              radius: Style.spaceReal(3)
+              anchors.verticalCenter: parent.verticalCenter
+              color: root.roster.på ? Color.accent : "transparent"
+              border.width: 1
+              border.color: root.roster.på ? Color.accent : root.dimFg
+            }
+
+            Text {
+              width: popCol.width - Style.space(200)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Särskilj röster"
+              color: root.fg
+              elide: Text.ElideRight
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.roster.nedladdade !== true
+                    ? "ladda ner 70 MB"
+                    : (root.roster.på === true ? "på" : "av")
+              color: root.roster.på ? Color.accent : root.dimFg
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+              font.bold: root.roster.på === true
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: root.roster.nedladdade !== true
+                  ? "sherpa-onnx + röstmodeller (ingen molntjänst)"
+                  : ("antal talare: " + (root.roster.antal_talare > 0
+                     ? root.roster.antal_talare + " (fastställt)"
+                     : "hittas automatiskt"))
+            color: root.dimFg
+            elide: Text.ElideRight
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Rectangle {
+          visible: root.nedladdning === "talaruppdelningen"
+          anchors.left: parent.left
+          anchors.bottom: parent.bottom
+          height: Style.spaceReal(3)
+          width: parent.width * root.nedladdningProcent / 100
+          color: Color.accent
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          hoverEnabled: true
+          enabled: root.nedladdning === "" || root.nedladdning === "talaruppdelningen"
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.vaxlaRoster()
+        }
+      }
+
+      Text {
+        visible: root.nedladdning !== ""
+        width: popCol.width
+        text: "Laddar ner " + (root.nedladdning === "talaruppdelningen"
+              ? "talaruppdelningen (~70 MB)" : root.nedladdning)
+              + (root.nedladdningProcent > 0 ? " — " + root.nedladdningProcent + " %" : " …")
+        color: Color.accent
+        wrapMode: Text.WordWrap
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.caption
       }
 
       Text {

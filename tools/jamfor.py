@@ -67,7 +67,7 @@ def kor(wav, modell, tag):
     ut = os.path.join("/tmp", f"wer-{tag}")
     vad = notat.find_vad()
     args = [notat.WHISPER, "-m", modell, "-f", wav, "-l", notat.LANG,
-            "-oj", "-of", ut, "-t", "12", "-nt"]
+            "-oj", "-of", ut, "-t", "12"]
     if vad:
         args += ["--vad", "-vm", vad]
     args += os.environ.get("NOTAT_WHISPER_EXTRA", "").split()

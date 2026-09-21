@@ -9,6 +9,8 @@
   notat modeller   visa modellerna och vilken som är vald
   notat modell <id>      välj modell (måste vara nedladdad)
   notat hamta <id>       ladda ner en modell (procent per rad)
+  notat röster på|av     skilj talare åt i dokumentet (Deltagare 1, 2 ...)
+  notat diar-hamta       ladda ner talaruppdelningen (~70 MB)
   notat transcribe <mapp>   transkribera en tidigare inspelning igen
   notat devices    visa vilka enheter som används (och vilka som valts bort)
 """
@@ -61,6 +63,31 @@ MODELLER = [
      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"},
 ]
 VAD_NAMES = ["ggml-silero-v5.1.2.bin", "ggml-silero-v5.0.0.bin"]
+
+# Talaruppdelning (diarisering) med sherpa-onnx: statiskt C++-binär + ONNX-modeller,
+# ingen torch och ingen gated modell. Mätt på eget prov (2 svenska röster, 16 kända
+# turer): NeMo TitaNet small gav 100 % rätt med känt antal talare, medan
+# auto-klustringens standardtröskel (0,5) sprack till 4-10 talare. Tröskeln styr
+# antalet: högre = färre talare.
+DIAR_ROOT = os.path.join(HOME, ".local/share/notat/diar")
+DIAR_BIN = os.path.join(DIAR_ROOT, "sherpa/bin/sherpa-onnx-offline-speaker-diarization")
+DIAR_SEG = os.path.join(DIAR_ROOT, "seg/model.onnx")
+DIAR_EMB = os.path.join(DIAR_ROOT, "emb/nemo_en_titanet_small.onnx")
+DIAR_TRÖSKEL = float(os.environ.get("NOTAT_DIAR_TRÖSKEL", "0.8"))
+DIAR_FILER = [
+    {"nm": "sherpa-onnx", "mb": 23, "tar": True, "mål": os.path.join(DIAR_ROOT, "sherpa"),
+     "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/"
+            "sherpa-onnx-v1.13.8-linux-x64-shared-no-tts.tar.bz2"},
+    {"nm": "talarsegmentering (pyannote)", "mb": 6, "tar": True, "mål": os.path.join(DIAR_ROOT, "seg"),
+     "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/"
+            "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"},
+    {"nm": "röst-embedding (NeMo TitaNet small)", "mb": 40, "tar": False, "mål": DIAR_EMB,
+     "url": "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/main/"
+            "nemo_en_titanet_small.onnx"},
+]
+for _f in DIAR_FILER:               # vad som måste finnas för att diariseringen ska funka
+    _f["klar"] = DIAR_BIN if _f["mål"].endswith("sherpa") else (
+        DIAR_SEG if _f["mål"].endswith("seg") else DIAR_EMB)
 LANG = os.environ.get("NOTAT_LANG", "auto")
 OMASCRIBE_CFG = os.path.join(HOME, ".config/omascribe/config.json")
 VAULT_FALLBACK = os.path.join(HOME, "Documents/OmaScribe Vault")
@@ -116,6 +143,171 @@ def find_model():
     sys.exit("notat: hittar ingen whisper-modell (sätt NOTAT_MODEL eller ladda ner en i baren)")
 
 
+def ladda_ner(url, tmp, min_mb=1):
+    """Strömmar en fil till tmp och skriver {"procent": N} per rad (barens mätare läser dem)."""
+    req = urllib.request.Request(url, headers={"User-Agent": "notat/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+        total = int(r.headers.get("Content-Length") or 0)
+        klart, nästa = 0, 0
+        while True:
+            bit = r.read(1 << 20)
+            if not bit:
+                break
+            f.write(bit)
+            klart += len(bit)
+            p = int(klart * 100 / total) if total else 0
+            if p >= nästa:
+                print(json.dumps({"procent": p, "mb": klart >> 20}), flush=True)
+                nästa = p + 5
+    if os.path.getsize(tmp) < min_mb * 1_000_000:
+        raise ValueError("filen är för liten - nedladdningen gick fel")
+
+
+def röster_på():
+    cfg = notat_config()
+    return bool(cfg.get("röster"))
+
+
+def diar_finns():
+    return all(os.path.exists(f["klar"]) for f in DIAR_FILER)
+
+
+def cmd_diar_hamta(_args):
+    """Hämtar sherpa-onnx + segmentering + embedding (~70 MB) för talaruppdelningen."""
+    import tarfile
+    os.makedirs(DIAR_ROOT, exist_ok=True)
+    try:
+        for f in DIAR_FILER:
+            if os.path.exists(f["klar"]):
+                print(json.dumps({"ok": True, "redan": True, "vad": f["nm"]}, ensure_ascii=False))
+                continue
+            if f["tar"]:
+                tmp = os.path.join(DIAR_ROOT, os.path.basename(f["url"]))
+                ladda_ner(f["url"], tmp, min_mb=5)
+                ut = tmp + ".ut"
+                os.makedirs(ut, exist_ok=True)
+                with tarfile.open(tmp, "r:bz2") as t:
+                    try:
+                        t.extractall(ut, filter="data")
+                    except TypeError:                 # python < 3.12
+                        t.extractall(ut)
+                inre = os.path.join(ut, os.listdir(ut)[0])   # paketet har en toppkatalog
+                shutil.copytree(inre, f["mål"], dirs_exist_ok=True)
+                shutil.rmtree(ut, ignore_errors=True)
+                os.unlink(tmp)
+                if os.path.exists(DIAR_BIN):
+                    os.chmod(DIAR_BIN, 0o755)
+            else:
+                os.makedirs(os.path.dirname(f["mål"]), exist_ok=True)
+                ladda_ner(f["url"], f["mål"] + ".del", min_mb=5)
+                os.replace(f["mål"] + ".del", f["mål"])
+            print(json.dumps({"ok": True, "vad": f["nm"], "färdig": diar_finns()}, ensure_ascii=False))
+    except Exception as e:
+        log(f"diar-hamta misslyckades: {e}")
+        print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+        return 1
+    log("diar-hamta klar")
+    print(json.dumps({"ok": True, "sökväg": DIAR_ROOT, "talare": True}, ensure_ascii=False))
+    return 0
+
+
+def cmd_röster(args):
+    """notat röster på|av - skilj talare åt i dokumentet som Deltagare 1, 2 ..."""
+    val = (args["_"][0] if args["_"] else "").lower()
+    if val not in ("på", "av", "ja", "nej", "true", "false", "on", "off"):
+        print(json.dumps({"ok": False, "error": "använd: notat röster på|av"}, ensure_ascii=False))
+        return 1
+    på = val in ("på", "ja", "true", "on")
+    if på and not diar_finns():
+        print(json.dumps({"ok": False, "saknas": True,
+                          "error": "talaruppdelningen är inte nedladdad (kör: notat diar-hamta)"},
+                         ensure_ascii=False))
+        return 1
+    cfg = notat_config()
+    cfg["röster"] = på
+    try:
+        os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+        with open(CONFIG, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        return 1
+    log(f"röster {val}")
+    print(json.dumps({"ok": True, "röster": på, "antal_talare": cfg.get("antal_talare") or 0},
+                     ensure_ascii=False))
+    return 0
+
+
+def diar_turer(wav, antal_talare=0):
+    """Talarturer ur en wav: ([(start, slut, 'speaker_00')], fel)."""
+    if not diar_finns():
+        return None, "talaruppdelningen är inte nedladdad (kör: notat diar-hamta)"
+    args = [DIAR_BIN, "--segmentation.pyannote-model=" + DIAR_SEG, "--embedding.model=" + DIAR_EMB]
+    if antal_talare:
+        args.append(f"--clustering.num-clusters={antal_talare}")
+    else:
+        args.append(f"--clustering.cluster-threshold={DIAR_TRÖSKEL}")
+    miljö = dict(os.environ)
+    lib = os.path.join(DIAR_ROOT, "sherpa/lib")
+    if os.path.isdir(lib):
+        miljö["LD_LIBRARY_PATH"] = lib + ":" + miljö.get("LD_LIBRARY_PATH", "")
+    r = sh(*args, wav, env=miljö)
+    ut = []
+    for rad in (r.stdout or "").splitlines():
+        m = re.match(r"\s*([\d.]+)\s*--\s*([\d.]+)\s+(speaker_\d+)", rad)
+        if m:
+            ut.append((float(m.group(1)), float(m.group(2)), m.group(3)))
+    if not ut:
+        return None, (r.stderr or r.stdout or "diariseringen gav inga turer").strip()[-300:]
+    return ut, None
+
+
+def diar_etiketter(turer, dominant=None, bas=0):
+    """Diariseringens talare -> läsbara etiketter, sorterade efter taltid.
+
+    Den som pratar mest först (läraren/mötessledaren blir 'Deltagare 1'), och på
+    mikrofonens spår får den mest talföre etiketten 'Du'. 'bas' skjuter numreringen så
+    att talare från olika spår inte krockar.
+    """
+    tid = {}
+    for t in turer:
+        tid[t[2]] = tid.get(t[2], 0.0) + (t[1] - t[0])
+    ut, n = {}, 1
+    for i, talare in enumerate(sorted(tid, key=lambda s: -tid[s])):
+        if i == 0 and dominant:
+            ut[talare] = dominant
+        else:
+            ut[talare] = f"Deltagare {bas + n}"
+            n += 1
+    return ut
+
+
+def talare_vid(turer, etiketter, start, slut):
+    """Etiketten för det diariseringssegment som täcker mest av stycket (annars None)."""
+    bästa, täckning = None, 0.0
+    for t in turer:
+        o = min(slut, t[1]) - max(start, t[0])
+        if o > täckning:
+            bästa, täckning = t[2], o
+    if bästa is None or täckning < 0.3 * max(0.1, slut - start):
+        return None
+    return etiketter.get(bästa)
+
+
+def märk_segment(segs, turer, etiketter):
+    """Sätter talaretikett på varje whisper-segment och behåller spårnumret i etiketten.
+
+    Måste ske FÖRE paragraphs(): slås styckena ihop först kan ett stycke spänna flera
+    talare, och då blir tilldelningen en gissning i stället för en mätning.
+    """
+    ut = []
+    for start, slut, who, text in segs:
+        talare = talare_vid(turer, etiketter, start, slut)
+        nr = who.split("#")[1] if "#" in who else ""
+        ut.append((start, slut, f"{talare or who.split('#')[0]}#{nr}", text))
+    return ut
+
+
 def cmd_modeller(_args):
     print(json.dumps({"modeller": modell_katalog(), "vald": notat_config().get("modell") or "",
                       "rot": MODEL_ROOT, "nedladdade": os.path.isdir(MODEL_ROOT)},
@@ -163,22 +355,7 @@ def cmd_hamta(args):
     os.makedirs(dest_dir, exist_ok=True)
     dest, tmp = os.path.join(dest_dir, m["fil"]), os.path.join(dest_dir, m["fil"] + ".del")
     try:
-        req = urllib.request.Request(m["url"], headers={"User-Agent": "notat/1.0"})
-        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
-            total = int(r.headers.get("Content-Length") or 0)
-            klart, nästa = 0, 0
-            while True:
-                bit = r.read(1 << 20)
-                if not bit:
-                    break
-                f.write(bit)
-                klart += len(bit)
-                p = int(klart * 100 / total) if total else 0
-                if p >= nästa:
-                    print(json.dumps({"procent": p, "mb": klart >> 20}), flush=True)
-                    nästa = p + 5
-        if os.path.getsize(tmp) < 1_000_000:      # en felsida sparad som modell
-            raise ValueError("filen är för liten - nedladdningen gick fel")
+        ladda_ner(m["url"], tmp, min_mb=1)
         os.replace(tmp, dest)
     except Exception as e:
         try:
@@ -317,6 +494,9 @@ def cmd_valj(args):
 
 def vault_root():
     """Var dokumenten hamnar: 'valv' i config först, sedan OmaScribes valv, annars egen mapp."""
+    från_env = os.environ.get("NOTAT_VAULT")
+    if från_env:
+        return os.path.expanduser(från_env)
     egen = notat_config().get("valv")
     if egen:
         return os.path.expanduser(egen)
@@ -484,7 +664,10 @@ def cmd_stop(args):
 # ------------------------------------------------------------------ transkribering
 
 def whisper(wav, outbase, model, vad):
-    args = [WHISPER, "-m", model, "-f", wav, "-l", LANG, "-oj", "-of", outbase, "-t", "12", "-nt"]
+    # INTE -nt: utan tidsstämplar slår whisper ihop talet till några få klumpar (mätt:
+    # 3 segment på 18-46 s för 110 s tal, mot 24 segment på 1-5 s med tidsstämplar).
+    # Grova segment gör både dokumentet trögare att läsa och talaruppdelningen omöjlig.
+    args = [WHISPER, "-m", model, "-f", wav, "-l", LANG, "-oj", "-of", outbase, "-t", "12"]
     if vad:
         args += ["--vad", "-vm", vad]
     r = sh(*args)
@@ -598,7 +781,7 @@ def dedupe(paras, envs, ratio=0.85, overlap_frac=0.5):
     for p in paras:
         duplikat = None
         for q in keep:
-            if p[2] == q[2]:                       # samma enhet -> aldrig dubblett
+            if track_no(p) == track_no(q):           # samma enhet -> aldrig dubblett
                 continue
             kortast = min(p[1] - p[0], q[1] - q[0])
             if kortast <= 0 or min(p[1], q[1]) - max(p[0], q[0]) < overlap_frac * kortast:
@@ -620,15 +803,16 @@ def dedupe(paras, envs, ratio=0.85, overlap_frac=0.5):
     return keep
 
 
-def eko_stycken(paras, envs, ratio=0.5):
+def eko_stycken(paras, envs, spårtyp, ratio=0.5):
     """Räknar mikrofonstycken som hörde utgången (dvs mötet gick i högtalarna).
 
     Mätt på en riktig körning: mikrofon mot utgång gav 0,64-0,70 i hel-stycke-
     korrelation när ljudet hördes i rummet, medan olika ljud samtidigt ligger under
-    0,3. Gränsen 0,5 skiljer de två fallen.
+    0,3. Gränsen 0,5 skiljer de två fallen. Vilket spår som är vilket kommer ur
+    'spårtyp' (diariseringen kan ha bytt ut talaretiketten i texten).
     """
-    ut = [p for p in paras if p[2].startswith("Mötet")]
-    mic = [p for p in paras if p[2].startswith("Du")]
+    ut = [p for p in paras if spårtyp.get(track_no(p)) == "ut"]
+    mic = [p for p in paras if spårtyp.get(track_no(p)) == "in"]
     träffar = 0
     for p in mic:
         for q in ut:
@@ -752,24 +936,48 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
 
     model = find_model()
     vad = find_vad()
+    röster = röster_på()
+    antal_talare = int(notat_config().get("antal_talare") or 0)
     all_segs = []
     failures = []
     kallor = []
     envs = {}
+    dian = {}          # spårnummer -> talarturer
+    etiketter = {}     # spårnummer -> {speaker_00: 'Deltagare 1', ...}
+    spårtyp = {}       # spårnummer -> 'ut' (mötet) eller 'in' (mikrofon)
+    talarräknare = 0
     for i, (f, who, desc) in enumerate(tracks, 1):
         p = os.path.join(rawdir, f)
         if not os.path.exists(p):
             failures.append(f"{desc}: ingen fil (enheten dog under inspelningen)")
             continue
-        if duration(p) >= 1:
-            kallor.append(f"{desc} ({mmss(duration(p))})")
+        spårtyp[i] = "ut" if who.startswith("Mötet") else "in"
+        dur = duration(p)
+        if dur >= 1:
+            kallor.append(f"{desc} ({mmss(dur)})")
         envs[i] = envelope(p)
+        if röster and dur >= 15:
+            turer, diarfel = diar_turer(p, antal_talare)
+            if turer:
+                stämplar = diar_etiketter(turer, dominant="Du" if who.startswith("Du") else None,
+                                          bas=talarräknare)
+                dian[i] = turer
+                etiketter[i] = stämplar
+                talarräknare += sum(1 for v in stämplar.values() if v.startswith("Deltagare"))
+            else:
+                failures.append(f"{desc}: talaruppdelningen misslyckades ({diarfel})")
+                log(f"diarisering av {f}: {diarfel}")
         data, err = whisper(p, os.path.join(rawdir, os.path.splitext(f)[0]), model, vad)
         if err:
             failures.append(f"{desc}: {err}")
             continue
         # enhetens nummer i talaretiketten: två mikrofoner har samma "Du" men är olika spår
-        all_segs += segments(data, f"{who}#{i}")
+        segs = segments(data, f"{who}#{i}")
+        if etiketter.get(i):
+            # talaren sätts per segment: först därefter slås stycken ihop, annars kan ett
+            # stycke spänna flera röster och etiketten blir en gissning
+            segs = märk_segment(segs, dian[i], etiketter[i])
+        all_segs += segs
     all_segs.sort(key=lambda s: s[0])
     paras = dedupe(paragraphs(all_segs), envs)
 
@@ -781,13 +989,19 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     title = f"Möte {stamp}"
     lines = [f"# {title}", "",
              f"**Inspelat:** {when} · {mmss(seconds)} · "
-             f"{'VAD' if vad else 'ingen VAD'} · modell {modell_namn(model)}", ""]
+             f"{'VAD' if vad else 'ingen VAD'} · {'röster · ' if etiketter else ''}"
+             f"modell {modell_namn(model)}", ""]
     if kallor:
         lines += [f"**Källor:** {' · '.join(kallor)}", ""]
+    if etiketter:
+        använda = sorted({v for m in etiketter.values() for v in m.values()},
+                         key=lambda s: (not s.startswith("Du"), s))
+        lines += [f"**Talare:** {' · '.join(använda)} — rösterna skiljs åt lokalt, "
+                  "numren gäller den här inspelningen", ""]
     lines += [f"**Rå ljud:** `{rawdir}`", ""]
     if not vad:
         lines += ["> [!warning] Ingen VAD-modell hittad - tysta partier kan bli påhittad text", ""]
-    eko, antal_mic = eko_stycken(paras, envs)
+    eko, antal_mic = eko_stycken(paras, envs, spårtyp)
     if eko:
         lines += [f"> [!warning] Mötets ljud hördes i rummet ({eko} av {antal_mic} mikrofonstycken "
                   "är samma ljud som utgången): samma diskussion står därför två gånger. "
@@ -885,6 +1099,9 @@ def cmd_devices(_args):
                       "uteslutna": UTESLUTNA,
                       "config": CONFIG,
                       "model": find_model(), "vad": find_vad(),
+                      "röster": {"på": röster_på(), "nedladdade": diar_finns(),
+                                 "tröskel": DIAR_TRÖSKEL,
+                                 "antal_talare": notat_config().get("antal_talare") or 0},
                       "vault": os.path.join(vault_root(), VAULT_FOLDER)},
                      ensure_ascii=False, indent=2))
     return 0
@@ -909,7 +1126,7 @@ def main(argv):
     table = {"start": cmd_start, "stop": cmd_stop, "status": cmd_status,
              "transcribe": cmd_transcribe, "devices": cmd_devices, "toggle": cmd_toggle,
              "valj": cmd_valj, "modeller": cmd_modeller, "modell": cmd_modell,
-             "hamta": cmd_hamta}
+             "hamta": cmd_hamta, "röster": cmd_röster, "diar-hamta": cmd_diar_hamta}
     if cmd in ("-h", "--help", "help"):
         print(USAGE)
         return 0

@@ -154,14 +154,18 @@ def test_korr_hittar_forskjutningen():
 def test_eko_varningen_tander_bara_nar_utgangen_hors_i_micken():
     m = _mönster()
     envs = {1: _kuvert(m), 2: _kuvert(m, förskjutning=3, skala=0.5)}
+    spårtyp = {1: "ut", 2: "in"}
     mic = [0.0, 5.0, "Du#2", "Det var väl med den andra kursen, det är det vi kör nu."]
     ut = [0.0, 5.0, "Mötet#1", "Någonting i början av kursen att det inte kommer vara mer."]
-    träffar, antal = notat.eko_stycken([mic, ut], envs)
+    träffar, antal = notat.eko_stycken([mic, ut], envs, spårtyp)
     assert (träffar, antal) == (1, 1), (träffar, antal)
     # olika ljud samtidigt: ingen varning, och stycket behålls
     envs[2] = _kuvert([300 * ((i * 7) % 11) for i in range(300)])
-    assert notat.eko_stycken([mic, ut], envs) == (0, 1)
+    assert notat.eko_stycken([mic, ut], envs, spårtyp) == (0, 1)
     assert len(notat.dedupe([mic, ut], envs)) == 2
+    # diariseringen kan ha döpt om talaren - spårnumret avgör, inte namnet
+    omdöpt = [0.0, 5.0, "Deltagare 1#1", "Någonting i början av kursen."]
+    assert notat.eko_stycken([mic, omdöpt], envs, spårtyp) == (0, 1)
 
 
 def test_uteslutning_fran_config():
@@ -265,6 +269,58 @@ def test_modellernas_url_ger_en_fil():
             mb = int(r.headers.get("Content-Length") or 0) >> 20
             assert r.status == 200 and mb > 100, f"{m['id']}: {r.status} {mb} MB"
             assert abs(mb - m["mb"]) < max(200, m["mb"] * 0.3), f"{m['id']}: katalogen säger {m['mb']} MB, filen är {mb} MB"
+
+
+def test_talaretiketter_och_tilldelning():
+    """Diarisering -> etiketter: mest talför först, och mikrofonens spår blir 'Du'."""
+    turer = [(0, 10, "speaker_01"), (10, 14, "speaker_00"), (14, 40, "speaker_01")]
+    m = notat.diar_etiketter(turer)
+    assert m == {"speaker_01": "Deltagare 1", "speaker_00": "Deltagare 2"}, m
+    m2 = notat.diar_etiketter(turer, bas=2)          # två spår får inte samma nummer
+    assert m2["speaker_01"] == "Deltagare 3" and m2["speaker_00"] == "Deltagare 4", m2
+    m3 = notat.diar_etiketter(turer, dominant="Du")
+    assert m3["speaker_01"] == "Du" and m3["speaker_00"] == "Deltagare 1", m3
+
+    assert notat.talare_vid(turer, m, 1.0, 9.0) == "Deltagare 1"      # störst överlapp vinner
+    assert notat.talare_vid(turer, m, 10.5, 13.0) == "Deltagare 2"
+    assert notat.talare_vid([(0, 1, "speaker_00")], m, 100.0, 104.0) is None   # ingen gissning
+
+    # märkningen sker per segment och spårnumret behålls - dubblett- och ekologiken
+    # hänger på numret, inte på talarens namn
+    segs = [(1.0, 9.0, "Mötet#1", "hej"), (10.5, 13.0, "Mötet#1", "där"),
+            (60.0, 64.0, "Mötet#1", "utanför diariseringen")]
+    ut = notat.märk_segment(segs, turer, m)
+    assert [s[2] for s in ut] == ["Deltagare 1#1", "Deltagare 2#1", "Mötet#1"], ut
+    assert ut[0][3] == "hej" and ut[0][0] == 1.0, ut[0]          # text och tider orörda
+
+
+def test_roster_vaxeln_och_vagran():
+    """Röstväxeln skriver config, vägrar slås på utan modeller, och hämtar inte i onödan."""
+    import shutil
+    tmp = tempfile.mkdtemp()
+    cfgp = os.path.join(tmp, "config.json")
+    with open(cfgp, "w", encoding="utf-8") as f:
+        json.dump({}, f)
+    gammal_cfg, gammal_filer = notat.CONFIG, notat.DIAR_FILER
+    notat.CONFIG = cfgp
+    try:
+        notat.DIAR_FILER = [{"klar": os.path.join(tmp, "saknas"), "nm": "x", "mb": 1}]
+        assert notat.diar_finns() is False
+        assert notat.cmd_röster({"_": ["på"]}) == 1
+        assert notat.notat_config().get("röster") in (None, False), "slog på utan modeller"
+        assert notat.cmd_röster({"_": ["av"]}) == 0
+        assert notat.cmd_röster({"_": ["kanske"]}) == 1, "okänt läge ska vägras"
+
+        klar = os.path.join(tmp, "modell"); open(klar, "w").close()
+        notat.DIAR_FILER = [{"klar": klar, "nm": "x", "mb": 1}]
+        assert notat.diar_finns() is True
+        assert notat.cmd_röster({"_": ["på"]}) == 0
+        assert notat.notat_config()["röster"] is True
+        assert notat.röster_på() is True
+        assert notat.cmd_diar_hamta({"_": []}) == 0, "ska inte ladda ner när allt finns"
+    finally:
+        notat.CONFIG, notat.DIAR_FILER = gammal_cfg, gammal_filer
+        shutil.rmtree(tmp)
 
 
 if __name__ == "__main__":

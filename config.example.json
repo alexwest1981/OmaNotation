@@ -1,6 +1,8 @@
 {
-  "_kommentar": "notat: vilka enheter som spelas in, vilken modell och var dokumenten hamnar. Ändras enklast i källmenyn i toppbaren (högerklick på mikrofonikonen).",
+  "_kommentar": "notat: vilka enheter som spelas in, vilken modell, om rösterna skiljs åt och var dokumenten hamnar. Ändras enklast i menyn i toppbaren (högerklick på mikrofonikonen).",
   "uteslut": [],
   "modell": "",
+  "röster": true,
+  "antal_talare": 0,
   "valv": ""
 }
