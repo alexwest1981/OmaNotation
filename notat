@@ -67,15 +67,49 @@ def find_vad():
     return None
 
 
-def devices():
-    # NOTAT_SINK / NOTAT_SOURCE pekar om enheterna (test, eller valt ljudkort)
-    sink = os.environ.get("NOTAT_SINK") or sh("pactl", "get-default-sink").stdout.strip()
-    source = os.environ.get("NOTAT_SOURCE") or sh("pactl", "get-default-source").stdout.strip()
-    if not sink or not source:
-        sys.exit("notat: pactl svarar inte (PipeWire igång?)")
-    remote = sink if sink.endswith(".monitor") else sink + ".monitor"
-    # ponytail: enheter låses vid start; byter du ljudkort mitt i får du starta om
-    return remote, source
+SKIP_HINTS = ("null", "notat_test", "dummy")
+
+
+def pactl_json(kind):
+    r = sh("pactl", "-f", "json", "list", kind)
+    try:
+        return json.loads(r.stdout or "[]")
+    except ValueError:
+        return []
+
+
+def clean_desc(desc):
+    d = (desc or "").strip()
+    return d[len("Monitor of "):].strip() if d.startswith("Monitor of ") else d
+
+
+def device_list():
+    """Varje ljudutgång och varje ljudingång — inte bara standardenheterna.
+
+    'Allt ljud' betyder: spelar Zoom ut i hörlurarna medan videon går i högtalarna,
+    eller byter du mic mitt i, fångas båda. En enhet per ffmpeg, så en död enhet
+    (urkopplad USB, upptagen HDMI) fäller inte resten.
+    """
+    sink_env, source_env = os.environ.get("NOTAT_SINK"), os.environ.get("NOTAT_SOURCE")
+    if sink_env or source_env:      # låst/testat läge: exakt två enheter
+        sink = sink_env or sh("pactl", "get-default-sink").stdout.strip()
+        source = source_env or sh("pactl", "get-default-source").stdout.strip()
+        if not sink or not source:
+            sys.exit("notat: pactl svarar inte (PipeWire igång?)")
+        remote = sink if sink.endswith(".monitor") else sink + ".monitor"
+        return [("ut", remote, "Mötet", "vald utgång"), ("in", source, "Du", "vald ingång")]
+    tracks = []
+    for s in pactl_json("sinks"):
+        name = (s.get("name") or "").strip()
+        if name and not any(h in name.lower() for h in SKIP_HINTS):
+            tracks.append(("ut", name + ".monitor", "Mötet", clean_desc(s.get("description")) or name))
+    for s in pactl_json("sources"):
+        name = (s.get("name") or "").strip()
+        if name and ".monitor" not in name and not any(h in name.lower() for h in SKIP_HINTS):
+            tracks.append(("in", name, "Du", clean_desc(s.get("description")) or name))
+    if not tracks:
+        sys.exit("notat: hittar inga ljudenheter (pactl -f json list sinks/sources)")
+    return tracks
 
 
 def vault_root():
@@ -95,23 +129,33 @@ def load_session():
         return None
 
 
-def running(sess):
-    """True om ffmpeg-processen ur sessionen lever."""
-    if not sess:
-        return False
-    pid = sess.get("pid")
+def alive(pid):
+    """Lever processen, och är det fortfarande vår ffmpeg? (pid återanvänds annars)"""
     if not pid:
         return False
     try:
         os.kill(pid, 0)
     except OSError:
         return False
-    # pid kan ha återanvänts: kontrollera att det är vår ffmpeg
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as f:
             return b"ffmpeg" in f.read()
     except OSError:
         return False
+
+
+def session_pids(sess):
+    if not sess:
+        return []
+    pids = [t.get("pid") for t in sess.get("tracks") or []]
+    if sess.get("pid"):
+        pids.append(sess["pid"])          # äldre sessioner
+    return [p for p in pids if p]
+
+
+def running(sess):
+    """True så länge minst en av inspelningarna lever."""
+    return any(alive(p) for p in session_pids(sess))
 
 
 def log(msg):
@@ -142,48 +186,65 @@ def cmd_start(_args):
     if running(sess):
         print(json.dumps({"ok": False, "error": "spelar redan in", "since": sess["started"]}))
         return 0
-    remote, source = devices()
+    tracks = device_list()
     stamp = datetime.now().strftime("%Y-%m-%d %H-%M")
     outdir = os.path.join(RAW_ROOT, stamp)
     n = 2
-    while os.path.exists(os.path.join(outdir, "remote.wav")):
+    while os.path.exists(os.path.join(outdir, "session.json")):
         outdir = os.path.join(RAW_ROOT, f"{stamp}-{n}")   # två inspelningar samma minut
         n += 1
     os.makedirs(outdir, exist_ok=True)
-    fflog = open(os.path.join(outdir, "ffmpeg.log"), "w")
-    proc = subprocess.Popen([
-        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning",
-        "-f", "pulse", "-i", remote,
-        "-f", "pulse", "-i", source,
-        "-map", "0:a", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", os.path.join(outdir, "remote.wav"),
-        "-map", "1:a", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", os.path.join(outdir, "mic.wav"),
-    ], stdout=fflog, stderr=fflog, stdin=subprocess.DEVNULL, start_new_session=True)
+    started = []
+    for i, (kind, node, label, desc) in enumerate(tracks, 1):
+        name = f"{kind}{i}"
+        fflog = open(os.path.join(outdir, name + ".log"), "w")
+        proc = subprocess.Popen([
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning",
+            "-f", "pulse", "-i", node,
+            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", os.path.join(outdir, name + ".wav"),
+        ], stdout=fflog, stderr=fflog, stdin=subprocess.DEVNULL, start_new_session=True)
+        started.append({"file": name + ".wav", "node": node, "label": label,
+                        "desc": desc, "pid": proc.pid})
     time.sleep(1.0)
-    if proc.poll() is not None:
-        tail = ""
-        with open(os.path.join(outdir, "ffmpeg.log"), encoding="utf-8", errors="replace") as f:
-            tail = f.read()[-400:]
-        print(json.dumps({"ok": False, "error": "ffmpeg dog vid start: " + tail.strip()}))
+    live = [t for t in started if alive(t["pid"])]
+    if not live:
+        why = []
+        for t in started:
+            try:
+                with open(os.path.join(outdir, t["file"].replace(".wav", ".log")),
+                          encoding="utf-8", errors="replace") as f:
+                    tail = f.read()[-200:].strip()
+            except OSError:
+                tail = "?"
+            why.append(f"{t['desc']}: {tail}")
+        # ponytail: en död enhet får inte tysta de andra - bara noll levande är fel
+        print(json.dumps({"ok": False, "error": "ingen enhet kunde spelas in: " + " | ".join(why)},
+                         ensure_ascii=False))
         return 1
+    info = {"started": time.time(), "dir": outdir, "tracks": live, "pid": live[0]["pid"]}
     os.makedirs(STATE, exist_ok=True)
-    with open(SESSION, "w", encoding="utf-8") as f:
-        json.dump({"pid": proc.pid, "started": time.time(), "dir": outdir,
-                   "remote": remote, "source": source}, f)
-    notify("Spelar in", f"{remote}\n+ {source}")
-    log(f"start {outdir} pid={proc.pid} remote={remote} source={source}")
-    print(json.dumps({"ok": True, "dir": outdir, "remote": remote, "source": source}))
+    for path in (SESSION, os.path.join(outdir, "session.json")):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(info, f)
+    names = ", ".join(t["desc"] for t in live)
+    notify("Spelar in", f"{len(live)} enheter: {names[:70]}")
+    log(f"start {outdir} {len(live)}/{len(started)} enheter: {names}")
+    print(json.dumps({"ok": True, "dir": outdir,
+                      "tracks": [{"desc": t["desc"], "node": t["node"]} for t in live]},
+                     ensure_ascii=False))
     return 0
 
 
 def stop_ffmpeg(sess):
-    pid = sess["pid"]
-    if running(sess):
+    pids = [p for p in session_pids(sess) if alive(p)]
+    for pid in pids:
         os.kill(pid, signal.SIGINT)          # ffmpeg skriver klart wav-huvudet
-        for _ in range(100):
-            if not running(sess):
-                break
-            time.sleep(0.1)
-        else:
+    for _ in range(100):
+        if not any(alive(p) for p in pids):
+            return True
+        time.sleep(0.1)
+    for pid in pids:
+        if alive(pid):
             os.kill(pid, signal.SIGTERM)
     return True
 
@@ -251,6 +312,52 @@ def paragraphs(segs, gap=3.0, maxlen=400):
         else:
             out.append([start, end, who, text])
     return out
+
+
+def similar(a, b):
+    import difflib
+    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def track_no(par):
+    try:
+        return int(par[2].split("#")[1])
+    except (IndexError, ValueError):
+        return 0
+
+
+def dedupe(paras, min_len=25, overlap_frac=0.5, ratio=0.6):
+    """Samma mening fångad av flera enheter ska inte stå flera gånger.
+
+    Två mikrofoner hör samma röst, och hör de dessutom högtalarna kommer samma
+    mening en gång till. Utgångarna ligger före mikrofonerna i enhetslistan och
+    linjeljud slår akustiskt varje gång, så kopian från den lägsta enheten vinner
+    (starttiden avgör inte - pauser gör att kopiorna börjar olika). Både
+    tidsöverlapp OCH liknande text krävs, så två personer som pratar i mun på
+    varandra behålls.
+    """
+    keep = []
+    for p in paras:
+        duplikat = None
+        for q in keep:
+            if p[2] == q[2]:                       # samma enhet -> aldrig dubblett
+                continue
+            if len(p[3]) < min_len or len(q[3]) < min_len:
+                continue
+            kortast = min(p[1] - p[0], q[1] - q[0])
+            if kortast <= 0:
+                continue
+            if min(p[1], q[1]) - max(p[0], q[0]) < overlap_frac * kortast:
+                continue
+            if similar(p[3], q[3]) >= ratio:
+                duplikat = q
+                break
+        if duplikat is None:
+            keep.append(p)
+        elif track_no(p) < track_no(duplikat):     # bättre enhet: byt plats
+            keep[keep.index(duplikat)] = p
+    keep.sort(key=lambda p: p[0])
+    return keep
 
 
 def mmss(sec):
@@ -330,29 +437,53 @@ def summarize(transcript):
 def transcribe_dir(rawdir, seconds, sammanfatta=True):
     if not os.path.isdir(rawdir):
         sys.exit(f"notat: {rawdir} finns inte")
-    if not seconds:      # omtranskribering: längden finns i filen, inte i någon session
-        r = sh("ffprobe", "-v", "error", "-show_entries", "format=duration",
-               "-of", "csv=p=0", os.path.join(rawdir, "remote.wav"))
+    meta = {}
+    try:
+        with open(os.path.join(rawdir, "session.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:
+        pass
+    tracks = [(t["file"], t.get("label", "Mötet"), t.get("desc") or t["file"])
+              for t in (meta.get("tracks") or []) if t.get("file")]
+    if not tracks:      # äldre inspelning, eller dir där sessionen försvunnit
+        tracks = [("remote.wav", "Mötet", "ljudutgången"), ("mic.wav", "Du", "mikrofonen")]
+
+    def duration(path):
+        r = sh("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path)
         try:
-            seconds = int(float(r.stdout.strip()))
+            return float(r.stdout.strip())
         except ValueError:
-            seconds = 0
+            return 0.0
+
+    if not seconds:      # omtranskribering: längden finns i filen, inte i någon session
+        seconds = int(meta.get("seconds") or 0)
+    if not seconds:
+        for f, _l, _d in tracks:
+            p = os.path.join(rawdir, f)
+            if os.path.exists(p):
+                seconds = int(duration(p))
+                break
+
     model = find_model()
     vad = find_vad()
-    tracks = [("remote.wav", "Mötet"), ("mic.wav", "Du")]
     all_segs = []
     failures = []
-    for wav, who in tracks:
-        p = os.path.join(rawdir, wav)
+    kallor = []
+    for i, (f, who, desc) in enumerate(tracks, 1):
+        p = os.path.join(rawdir, f)
         if not os.path.exists(p):
+            failures.append(f"{desc}: ingen fil (enheten dog under inspelningen)")
             continue
-        data, err = whisper(p, os.path.join(rawdir, os.path.splitext(wav)[0]), model, vad)
+        if duration(p) >= 1:
+            kallor.append(f"{desc} ({mmss(duration(p))})")
+        data, err = whisper(p, os.path.join(rawdir, os.path.splitext(f)[0]), model, vad)
         if err:
-            failures.append(f"{who}: {err}")
+            failures.append(f"{desc}: {err}")
             continue
-        all_segs += segments(data, who)
+        # enhetens nummer i talaretiketten: två mikrofoner har samma "Du" men är olika spår
+        all_segs += segments(data, f"{who}#{i}")
     all_segs.sort(key=lambda s: s[0])
-    paras = paragraphs(all_segs)
+    paras = dedupe(paragraphs(all_segs))
 
     stamp = os.path.basename(rawdir)
     try:   # de första 16 tecknen är tidsstämpeln även när mappen fick "-2"-svans
@@ -362,8 +493,10 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     title = f"Möte {stamp}"
     lines = [f"# {title}", "",
              f"**Inspelat:** {when} · {mmss(seconds)} · "
-             f"{'VAD' if vad else 'ingen VAD'} · modell {os.path.basename(model)}", "",
-             f"**Rå ljud:** `{rawdir}`", ""]
+             f"{'VAD' if vad else 'ingen VAD'} · modell {os.path.basename(model)}", ""]
+    if kallor:
+        lines += [f"**Källor:** {' · '.join(kallor)}", ""]
+    lines += [f"**Rå ljud:** `{rawdir}`", ""]
     if not vad:
         lines += ["> [!warning] Ingen VAD-modell hittad - tysta partier kan bli påhittad text", ""]
     if failures:
@@ -372,7 +505,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
         lines += ["_Inget tal hittades i inspelningen._", ""]
     lines += ["## Transkription", ""]
     for start, _end, who, text in paras:
-        lines.append(f"**[{mmss(start)}] {who}:** {text}")
+        lines.append(f"**[{mmss(start)}] {who.split('#')[0]}:** {text}")
         lines.append("")
     lines += ["## Egna anteckningar", "", ""]
     content = "\n".join(lines)
@@ -391,7 +524,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     # Sammanfattningen hämtas EFTER att dokumentet skrivits: en seg eller död
     # AI-tjänst får aldrig kosta dig utskriften.
     if sammanfatta and paras:
-        transcript = "\n".join(f"[{mmss(s)}] {who}: {text}" for s, _e, who, text in paras)
+        transcript = "\n".join(f"[{mmss(s)}] {who.split('#')[0]}: {text}" for s, _e, who, text in paras)
         log(f"sammanfattar {len(transcript)} tecken via AI ...")
         txt, err = summarize(transcript)
         if txt:
@@ -446,9 +579,10 @@ def cmd_status(args):
 
 
 def cmd_devices(_args):
-    remote, source = devices()
-    print(json.dumps({"remote": remote, "source": source, "model": find_model(),
-                      "vad": find_vad(), "vault": os.path.join(vault_root(), VAULT_FOLDER)},
+    print(json.dumps({"enheter": [{"typ": k, "nod": n, "talare": l, "beskrivning": d}
+                                  for k, n, l, d in device_list()],
+                      "model": find_model(), "vad": find_vad(),
+                      "vault": os.path.join(vault_root(), VAULT_FOLDER)},
                      ensure_ascii=False, indent=2))
     return 0
 

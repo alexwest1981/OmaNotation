@@ -32,6 +32,19 @@ klick = start/stopp, högerklick = öppna mappen med dokumenten.
   Behålls med flit — `notat transcribe <mapp>` kan göra om dem.
 - **Logg:** `~/.local/share/notat/notat.log` (vem anropade vad, med föräldraprocess).
 
+## Var den lyssnar
+
+**Alla** ljudutgångar (via deras monitor — allt som spelas upp: Zoom, video, musik) och
+**alla** ljudingångar (mikrofoner, line-in). En ffmpeg per enhet och en fil per enhet, så en
+enhet som dör (urkopplad USB, upptagen HDMI) inte fäller de andra. På den här maskinen blir
+det sju spår: 3 utgångar + 3 ingångar (Q2U-mic, webbkameramic, line-in).
+
+Samma mening som fångas av flera enheter — två mikrofoner hör samma röst, och hör de
+dessutom högtalarna kommer den en gång till — slås ihop automatiskt. Utgångarnas kopior
+vinner över mikrofonernas (linjeljud slår akustiskt), och vilka enheter som gav ljud står i
+rubriken. `NOTAT_SINK`/`NOTAT_SOURCE` låser inspelningen till exakt två enheter (test, eller
+när du vill välja ljudkort själv).
+
 ## Beroenden
 
 - `whisper-cli` (`~/.local/bin`) + `ggml-small.bin` (letas i `NOTAT_MODEL_DIR`,
@@ -55,7 +68,7 @@ fyllas av påhittad text under pauserna.
 ## Test
 
 ```bash
-python3 test_notat.py          # ren logik: segment, stycken, enheter (6/6)
+python3 test_notat.py          # ren logik: segment, stycken, dubbletter, enheter (13/13)
 bash tools/e2e.sh              # ände-till-ände via virtuell sink (inget ljud i rummet)
 ```
 

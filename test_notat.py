@@ -53,16 +53,35 @@ def test_mmss():
 
 def test_enheter_kraver_monitor_suffix():
     # .monitor ska inte dubbleras, och ett uttryckligt NOTAT_SINK ska vinna
-    env = dict(os.environ, NOTAT_SINK="notat_test.monitor", NOTAT_SOURCE="mic")
     old = os.environ.copy()
-    os.environ.update(env)
+    os.environ["NOTAT_SINK"] = "notat_test.monitor"
+    os.environ["NOTAT_SOURCE"] = "mic"
     try:
-        remote, source = notat.devices()
-        assert remote == "notat_test.monitor", remote
-        assert source == "mic", source
+        tracks = notat.device_list()
+        assert tracks[0][1] == "notat_test.monitor", tracks
+        assert tracks[1][1] == "mic", tracks
     finally:
         os.environ.clear()
         os.environ.update(old)
+
+
+def test_enheter_raknar_upp_alla_utgangar_och_ingangar():
+    """Utan NOTAT_SINK/NOTAT_SOURCE ska varje utgång och ingång fångas."""
+    old = os.environ.pop("NOTAT_SINK", None), os.environ.pop("NOTAT_SOURCE", None)
+    try:
+        tracks = notat.device_list()
+    finally:
+        if old[0] is not None:
+            os.environ["NOTAT_SINK"] = old[0]
+        if old[1] is not None:
+            os.environ["NOTAT_SOURCE"] = old[1]
+    assert tracks, "inga enheter"
+    ut = [t for t in tracks if t[0] == "ut"]
+    in_ = [t for t in tracks if t[0] == "in"]
+    assert ut and in_, (ut, in_)
+    assert all(t[1].endswith(".monitor") for t in ut), ut     # utgång läses som monitor
+    assert not any(".monitor" in t[1] for t in in_), in_      # monitor är ingen mikrofon
+    assert all(t[2] in ("Mötet", "Du") for t in tracks), tracks
 
 
 def test_chunks_delar_pa_styckegrans_utan_att_tappa_text():
@@ -88,6 +107,38 @@ def test_ai_config_foljer_omascribe():
     endpoint, key, model = notat.ai_config()
     assert endpoint.startswith("http"), endpoint
     assert model, "modell saknas"
+
+
+def test_dedupe_slar_ihop_samma_mening_fran_flera_enheter():
+    """Verkliga rader ur en körning: två mikrofoner + en utgång med samma mening."""
+    backlogg = [0.0, 5.0, "Mötet#4",
+                "mer i vår backlogg så att vi har mer att jobba på. Sedan från backloggen så gör du en ny "
+                "sprintlogg av de viktigaste punkterna som är högst prioriterade först."]
+    mic1 = [0.0, 5.0, "Du#5",
+            "ner i vår backlogg så att vi har mer att uppa på. Sedan från backloggen så gör vi en ny sprintlogg "
+            "av de viktigaste punkterna som högt prioriterade först."]
+    mic2 = [0.0, 5.0, "Du#6",
+            "så att vi har mer att jobba på. Sedan från backlagen så gör ni sprintlag av de viktigaste "
+            "punkterna som är högst prioriterade först."]
+    annan = [3.0, 6.0, "Mötet#4", "Förläsningen handlar om systemarkitektur och tentan är den 12 december."]
+    # mikrofonkopiorna börjar tidigast - utgången ska ändå vinna
+    kvar = notat.dedupe([mic1, mic2, backlogg, annan])
+    assert len(kvar) == 2, kvar
+    assert kvar[0][2] == "Mötet#4" and "backlogg" in kvar[0][3], kvar   # utgången vann
+    assert kvar[1][3].startswith("Förläsningen"), kvar
+
+
+def test_dedupe_ror_inte_ett_samtal():
+    """Två personer samtidigt (olika text, samma tid) ska båda vara kvar."""
+    a = [0.0, 5.0, "Mötet#1", "Vi går vidare med händelsedriven arkitektur i stället för lager på lager."]
+    b = [0.5, 4.0, "Du#2", "Kan vi använda samma databas för båda tjänsterna eller måste vi dela upp den?"]
+    assert len(notat.dedupe([a, b])) == 2
+
+
+def test_dedupe_ror_inte_korta_inpass():
+    a = [0.0, 5.0, "Mötet#1", "Ja precis."]
+    b = [1.0, 4.0, "Du#2", "Ja precis."]
+    assert len(notat.dedupe([a, b])) == 2, "korta svar ska inte slås ihop"
 
 
 if __name__ == "__main__":
