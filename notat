@@ -918,6 +918,18 @@ def eko_stycken(paras, envs, spårtyp, ratio=0.5):
     return träffar, len(mic)
 
 
+def talare_i_texten(paras):
+    """The speakers that actually appear in the document.
+
+    Diarisation labels each track on its own and creates clusters that later
+    disappear with the duplicates, so the label list is bigger than the text.
+    The document must not claim more voices than it shows (measured: 24 labels
+    for 7 speakers in the text).
+    """
+    return sorted({p[2].split("#")[0] for p in paras if p[2].split("#")[0] != "Mötet"},
+                  key=lambda s: (not s.startswith("Du"), s))
+
+
 def mmss(sec):
     sec = int(sec)
     return f"{sec // 60:02d}:{sec % 60:02d}"
@@ -1082,10 +1094,10 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     if kallor:
         lines += [f"**Källor:** {' · '.join(kallor)}", ""]
     if etiketter:
-        använda = sorted({v for m in etiketter.values() for v in m.values()},
-                         key=lambda s: (not s.startswith("Du"), s))
-        lines += [f"**Talare:** {' · '.join(använda)} — rösterna skiljs åt lokalt, "
-                  "numren gäller den här inspelningen", ""]
+        använda = talare_i_texten(paras)
+        if använda:
+            lines += [f"**Talare:** {' · '.join(använda)} — rösterna skiljs åt lokalt, "
+                      "numren gäller den här inspelningen", ""]
     lines += [f"**Rå ljud:** `{rawdir}`", ""]
     if not vad:
         lines += ["> [!warning] Ingen VAD-modell hittad - tysta partier kan bli påhittad text", ""]

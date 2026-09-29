@@ -390,6 +390,15 @@ def test_status_reports_running_transcription():
             notat.STATE, notat.SESSION, notat.JOB = gammal
 
 
+def test_speaker_list_only_shows_voices_in_the_text():
+    """The header must match the text: labels that vanished with the duplicates
+    must not be listed as participants."""
+    paras = [(0, 1, "Du#5", "hej"), (1, 2, "Deltagare 1#2", "hallå"),
+             (2, 3, "Mötet#1", "hm"), (3, 4, "Deltagare 1#3", "igen")]
+    assert notat.talare_i_texten(paras) == ["Du", "Deltagare 1"], notat.talare_i_texten(paras)
+    assert notat.talare_i_texten([(0, 1, "Mötet#1", "bara mötet")]) == []
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
