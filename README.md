@@ -32,6 +32,7 @@ cp build/bin/whisper-cli ~/.local/bin/
 |---|---|
 | `notat` | startar om inget spelas in, stoppar + transkriberar annars |
 | `notat start` / `notat stop` | samma sak, uttryckligen |
+| `notat stop --wait` | vänta på dokumentet i stället för att lämna ifrån sig jobbet |
 | `notat status [--json]` | läget (baren pollar den här) |
 | `notat devices` | enheter, modell och valv som används |
 | `notat valj <enhet>` | slå av/på en enhet (`notat valj alla` = allt på) |
@@ -48,6 +49,14 @@ en räknare. **Högerklick** öppnar menyn i tre avsnitt: **Källor att spela in
 enheter), **Modell** (byt modell, nedladdning sköts automatiskt om den saknas) och
 **Röster** (särskilj talarna). Klick utanför stänger menyn. Ändringar i menyn gäller nästa
 inspelning — en pågående inspelning rörs inte.
+
+Stoppet svarar direkt: transkriberingen körs i **ett eget barn i en egen session**, inte
+som barn till bar-widgeten. En omladdning av pluginen (tema, redigerad granne,
+`omarchy-restart-shell`) dödar barn till widgeten — och gjorde det mitt i ett jobb: en
+29-minutersinspelning blev aldrig ett dokument. Barnet skriver
+`$XDG_RUNTIME_DIR/notat/transcription.json`, och det är den filen baren läser: räknaren
+står kvar som **transkriberar mm:ss** tills dokumentet finns. `notat stop --wait` väntar
+i stället (för skript och prov).
 
 ## Var den lyssnar
 
@@ -200,6 +209,7 @@ ffmpeg -i /tmp/f.mp3 -ac 1 -ar 16000 tools/facit.wav
 | "hittar ingen whisper-modell" | välj/ladda ner en i bar-menyn, eller `notat hamta kb-whisper-small` |
 | Ingen text alls, inspelningen är tyst | fel enhet vald i menyn — `python3 tools/spar.py <mapp>` visar dB per spår |
 | Bar-knappen syns inte | `omarchy plugin enable custom.notat`, sedan `omarchy-restart-shell` |
+| Inget dokument efter stoppet | `notat status --json` säger om jobbet lever; barnets utskrift ligger i `~/.local/share/notat/raw/<mapp>/transcription.log`. Kör om med `notat transcribe "<mapp>"` |
 
 ## Licens
 

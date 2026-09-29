@@ -3,7 +3,8 @@
 
   notat            startar om inget spelas in, stoppar + transkriberar annars
   notat start      starta inspelning
-  notat stop       stoppa, transkribera, skriv dokument
+  notat stop       stoppa, transkribera, skriv dokument (transkriberingen går i
+                   bakgrunden; --wait väntar på dokumentet i stället)
   notat status     --json för baren
   notat valj <nod> slå av/på en enhet (notat valj alla = allt på)
   notat modeller   visa modellerna och vilken som är vald
@@ -30,6 +31,7 @@ HOME = os.path.expanduser("~")
 RUNTIME = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 STATE = os.path.join(RUNTIME, "notat")
 SESSION = os.path.join(STATE, "session.json")
+JOB = os.path.join(STATE, "transcription.json")   # running job, read by the bar
 LOG = os.path.join(HOME, ".local/share/notat/notat.log")
 RAW_ROOT = os.path.join(HOME, ".local/share/notat/raw")
 WHISPER = shutil.which("whisper-cli") or os.path.join(HOME, ".local/bin/whisper-cli")
@@ -543,6 +545,50 @@ def session_pids(sess):
     return [p for p in pids if p]
 
 
+def pid_alive(pid):
+    """Is the process alive? (no cmdline check — the child is our own script)"""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def job_write(pid, rawdir, seconds):
+    """The job file is the truth about a running transcription. The bar reads it
+    instead of keeping the state in QML memory: reloading the plugin clears the
+    memory, not the file."""
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        with open(JOB, "w", encoding="utf-8") as f:
+            json.dump({"pid": pid, "dir": rawdir, "seconds": seconds,
+                       "started": time.time()}, f)
+    except OSError:
+        pass
+
+
+def job_clear():
+    try:
+        os.unlink(JOB)
+    except OSError:
+        pass
+
+
+def job_state():
+    """The running transcription, or None. A child that died (killed, crashed)
+    must not leave a file claiming it is still working."""
+    try:
+        with open(JOB, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return None
+    if not pid_alive(d.get("pid")):
+        job_clear()
+        return None
+    d["elapsed"] = int(time.time() - (d.get("started") or time.time()))
+    return d
+
+
 def running(sess):
     """True så länge minst en av inspelningarna lever."""
     return any(alive(p) for p in session_pids(sess))
@@ -656,10 +702,28 @@ def cmd_stop(args):
         log(f"stop avbruten: bara {seconds}s")
         print(json.dumps({"ok": False, "error": "för kort", "seconds": seconds}))
         return 1
-    path = transcribe_dir(sess["dir"], seconds, sammanfatta=not args.get("no-summary"))
-    log(f"stop efter {seconds}s -> {path}")
-    print(json.dumps({"ok": bool(path), "note": path, "seconds": seconds}))
-    return 0 if path else 1
+    if args.get("wait"):
+        path = transcribe_dir(sess["dir"], seconds, sammanfatta=not args.get("no-summary"))
+        log(f"stop efter {seconds}s -> {path}")
+        print(json.dumps({"ok": bool(path), "note": path, "seconds": seconds}))
+        return 0 if path else 1
+
+    # The transcription must not be a child of the bar widget: reloading the
+    # plugin (theme change, edited neighbour, "local plugin changed") kills that
+    # child mid-job. Measured 2026-09-29: a 29-minute recording never became a
+    # document — the job died silently when the widget was rebuilt. Own child,
+    # own session, own job file that the bar can read.
+    script = os.path.realpath(__file__)
+    logfile = open(os.path.join(sess["dir"], "transcription.log"), "a", encoding="utf-8")
+    child = subprocess.Popen([sys.executable, script, "transcribe", sess["dir"], str(seconds)],
+                             stdin=subprocess.DEVNULL, stdout=logfile, stderr=logfile,
+                             start_new_session=True)
+    job_write(child.pid, sess["dir"], seconds)
+    log(f"stop after {seconds}s -> transcription continues in the background (pid {child.pid})")
+    notify("Transkriberar", f"{mmss(seconds)} ljud spelas igenom — dokumentet kommer när det är klart")
+    print(json.dumps({"ok": True, "transcribing": True, "dir": sess["dir"],
+                      "seconds": seconds}, ensure_ascii=False))
+    return 0
 
 
 # ------------------------------------------------------------------ transkribering
@@ -1087,14 +1151,21 @@ def modell_namn(path):
 def cmd_transcribe(args):
     rawdir = args["_"][0] if args["_"] else None
     if not rawdir:
-        sys.exit("notat transcribe <mapp med remote.wav/mic.wav>")
+        sys.exit("notat transcribe <mapp med remote.wav/mic.wav> [sekunder]")
     meta = {}
     try:
         with open(os.path.join(rawdir, "session.json"), encoding="utf-8") as f:
             meta = json.load(f)
     except Exception:
         pass
-    print(transcribe_dir(rawdir, meta.get("seconds", 0), sammanfatta=not args.get("no-summary")))
+    seconds = int(args["_"][1]) if len(args["_"]) > 1 else int(meta.get("seconds") or 0)
+    job_write(os.getpid(), rawdir, seconds)
+    try:
+        path = transcribe_dir(rawdir, seconds, sammanfatta=not args.get("no-summary"))
+        log(f"transcription done ({seconds}s) -> {path}")
+        print(path)
+    finally:
+        job_clear()
     return 0
 
 
@@ -1103,7 +1174,13 @@ def cmd_transcribe(args):
 def cmd_status(args):
     sess = load_session()
     live = running(sess)
-    info = {"recording": live, "seconds": 0, "dir": None, "started": None}
+    job = job_state()
+    info = {"recording": live, "seconds": 0, "dir": None, "started": None,
+            "transcribing": job is not None, "transcribing_seconds": 0,
+            "transcribing_dir": None}
+    if job:
+        info["transcribing_seconds"] = job["elapsed"]
+        info["transcribing_dir"] = job["dir"]
     if sess:
         info["dir"] = sess.get("dir")
         info["started"] = datetime.fromtimestamp(sess["started"]).strftime("%H:%M")
@@ -1113,7 +1190,8 @@ def cmd_status(args):
         print(json.dumps(info))
     else:
         print(f"{'SPELAR IN ' + mmss(info['seconds']) if live else 'spelar inte in'}"
-              + (f"  ({info['dir']})" if live else ""))
+              + (f"  ({info['dir']})" if live else "")
+              + (f"  TRANSKRIBERAR {mmss(info['transcribing_seconds'])}" if job else ""))
     return 0
 
 

@@ -15,8 +15,9 @@ BarWidget {
   readonly property color dimFg: Qt.darker(root.fg, 1.35)
 
   property bool recording: false
-  property bool busy: false          // notat jobbar (startar/transkriberar)
-  property int seconds: 0
+  property bool busy: false          // notat transkriberar (läses ur notat status)
+  property int seconds: 0            // inspelningens längd
+  property int jobSeconds: 0         // transkriberingens längd
   property bool popupOpen: false
   property var enheter: []           // [{typ, nod, talare, beskrivning, vald}]
   property var modeller: []          // [{id, namn, mb, beskrivning, finns, vald}]
@@ -25,9 +26,13 @@ BarWidget {
   property int nedladdningProcent: 0
   property string felText: ""
 
-  readonly property string clock:
-    Math.floor(seconds / 60).toString().padStart(2, "0") + ":" +
-    (seconds % 60).toString().padStart(2, "0")
+  function mmss(s) {
+    return Math.floor(s / 60).toString().padStart(2, "0") + ":" +
+           (s % 60).toString().padStart(2, "0")
+  }
+
+  // Klockan visar inspelningen medan den rullar, annars hur länge jobbet kört.
+  readonly property string clock: root.mmss(root.recording ? root.seconds : root.jobSeconds)
 
   readonly property string modellNamn: {
     for (var i = 0; i < root.modeller.length; i++)
@@ -103,7 +108,8 @@ BarWidget {
   function tooltip() {
     var modell = root.modellNamn ? " · " + root.modellNamn : ""
     var röst = root.roster.på === true ? " · röster" : ""
-    if (root.busy) return "Notat jobbar (transkriberar) …"
+    if (root.busy) return "Notat transkriberar " + root.clock + modell + röst +
+                          " — dokumentet kommer när det är klart. Högerklick: källor, modell och röster."
     if (root.recording) return "Spelar in " + root.clock + modell + röst + " — klick stoppar och gör dokument. Högerklick: källor, modell och röster."
     return "Klick: anteckna mötet/föreläsningen" + modell + röst + ". Högerklick: välj källor, modell och röster."
   }
@@ -118,6 +124,10 @@ BarWidget {
           var d = JSON.parse(text.trim())
           root.recording = d.recording === true
           root.seconds = d.seconds || 0
+          // The job lives in notat (job file), not in the widget: reloading the
+          // plugin must not make the transcription look finished.
+          root.busy = d.transcribing === true
+          root.jobSeconds = d.transcribing_seconds || 0
         } catch (e) {
           root.recording = false
         }
@@ -305,7 +315,7 @@ BarWidget {
 
     Text {
       visible: root.recording || root.busy
-      text: root.busy ? "…" : root.clock
+      text: root.clock
       color: root.recording ? root.recColor : root.fg
       font.family: root.bar ? root.bar.fontFamily : Style.font.family
       font.pixelSize: Style.font.bodySmall
@@ -323,6 +333,10 @@ BarWidget {
     onExited: if (root.bar) root.bar.hideTooltip(root)
     onClicked: function (mouse) {
       if (mouse.button === Qt.RightButton) {
+        // Trace in the journal (journalctl --user | grep notat): a right-click
+        // that does not open the menu must be distinguishable from a click that
+        // never arrived at the widget.
+        console.log("notat: right-click -> " + (root.popupOpen ? "close" : "open"))
         if (root.popupOpen) root.popupOpen = false
         else root.oppnaPopup()
       } else if (root.popupOpen) {

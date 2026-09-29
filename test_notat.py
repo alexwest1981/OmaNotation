@@ -3,6 +3,7 @@
 
   python3 test_notat.py     (0 = allt ok)
 """
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -346,6 +347,47 @@ def test_roster_vaxeln_och_vagran():
     finally:
         notat.CONFIG, notat.DIAR_FILER = gammal_cfg, gammal_filer
         shutil.rmtree(tmp)
+
+
+def test_status_reports_running_transcription():
+    """The bar reads the job from a file, not from QML memory.
+
+    Reloading the widget clears the memory — so status must be able to say
+    "transcribing" afterwards, and a dead child must not leave a lie behind.
+    """
+    import contextlib
+    import io
+    import subprocess
+    gammal = (notat.STATE, notat.SESSION, notat.JOB)
+    with tempfile.TemporaryDirectory() as d:
+        notat.STATE = d
+        notat.SESSION = os.path.join(d, "session.json")
+        notat.JOB = os.path.join(d, "transcription.json")
+
+        def status():
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                notat.cmd_status({"json": True})
+            return json.loads(buf.getvalue())
+
+        try:
+            assert status()["transcribing"] is False, "no job = not transcribing"
+
+            notat.job_write(os.getpid(), "/tmp/recording", 1741)
+            s = status()
+            assert s["transcribing"] is True and s["transcribing_dir"] == "/tmp/recording", s
+            assert s["transcribing_seconds"] >= 0, s
+
+            dead = subprocess.Popen(["true"])
+            dead.wait()                                   # reaped child = dead pid
+            notat.job_write(dead.pid, "/tmp/recording", 1741)
+            assert status()["transcribing"] is False, "a dead child must not look like a job"
+            assert not os.path.exists(notat.JOB), "dead jobs must be cleaned up"
+
+            notat.job_clear()
+            assert status()["transcribing"] is False
+        finally:
+            notat.STATE, notat.SESSION, notat.JOB = gammal
 
 
 if __name__ == "__main__":

@@ -14,7 +14,8 @@ fail=0
 notat start || fail=1
 sleep 1
 pw-play --target notat_test "$PROV" >/dev/null 2>&1
-notat stop
+# --wait: provet vill ha dokumentet i handen, inte bara ett kvitto på att jobbet startat
+notat stop --wait
 notat status --json
 
 pactl unload-module "$MOD"
