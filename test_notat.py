@@ -507,6 +507,36 @@ def test_röst_traffen_och_referensfilen():
         shutil.rmtree(tmp)
 
 
+def test_sok_och_senaste_i_valvet():
+    """Sök och senaste mot ett tillfälligt valv - rg är verktyget, inget index behövs."""
+    import shutil
+    if not shutil.which("rg"):
+        return                                # ripgrep saknas -> provet kan inte köras
+    gammal = notat.vault_root
+    d = tempfile.mkdtemp()
+    try:
+        os.makedirs(os.path.join(d, "Inspelningar"))
+        äldre = os.path.join(d, "Inspelningar", "Möte 2026-01-01 09-00.md")
+        nyare = os.path.join(d, "Inspelningar", "Möte 2026-02-02 09-00.md")
+        open(äldre, "w", encoding="utf-8").write("**[00:10] Ada:** mediator\n")
+        open(nyare, "w", encoding="utf-8").write("**[00:20] Bo:** annat\n")
+        os.utime(äldre, (1_000_000, 1_000_000))
+        notat.vault_root = lambda: d
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert notat.cmd_sök({"_": ["mediator"]}) == 0
+        assert "Ada" in buf.getvalue() and nyare not in buf.getvalue(), buf.getvalue()
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert notat.cmd_sök({"_": ["finns-inte-här"]}) == 1, "ingen träff ska säga till"
+        assert notat.senaste_dok() == nyare, "senaste = senast skriven"
+        assert notat.cmd_senaste({"_": []}) == 0
+    finally:
+        notat.vault_root = gammal
+        shutil.rmtree(d)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

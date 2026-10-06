@@ -45,6 +45,8 @@ cp build/bin/whisper-cli ~/.local/bin/
 | `notat möte "Titel"` | namnge mötet och ange deltagare (se nedan) |
 | `notat namn` | kända röster: visa, slå på/av, spara en röst från en fil |
 | `notat glöm <Namn>` | radera en röstprofil |
+| `notat sök <ord>` | sök i mötesdokumenten (ripgrep mot valvet) |
+| `notat senaste [--öppna]` | sökvägen till det senast skrivna dokumentet |
 | `notat stop --no-summary` | hoppa över AI-sammanfattningen |
 
 **Bar-knappen** (`custom.notat`, mikrofonikonen): vänsterklick startar/stoppar och visar
@@ -252,7 +254,7 @@ Utan VAD-modellen hittar whisper på text i tystnaden. Mätt: 5 minuter digital 
 ## Test
 
 ```bash
-python3 test_notat.py              # ren logik: segment, stycken, ljuddubbletter, enheter, modellval, talaretiketter, titel/deltagare (26/26)
+python3 test_notat.py              # ren logik: segment, stycken, ljuddubbletter, enheter, modellval, talaretiketter, titel/deltagare, röster, sök (28/28)
 NOTAT_NATVERK=1 python3 test_notat.py   # + att varje nedladdnings-URL ger en riktig fil
 bash tools/e2e.sh                  # ände-till-ände via virtuell sink (inget ljud i rummet)
 python3 tools/jamfor.py tools/facit.wav tools/facit.txt kb-whisper-small   # WER mot känd text
