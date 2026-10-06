@@ -43,6 +43,8 @@ cp build/bin/whisper-cli ~/.local/bin/
 | `notat diar-hamta` | ladda ner talaruppdelningen (~70 MB) |
 | `notat transcribe <mapp>` | gör om en tidigare inspelning (t.ex. med bättre modell) |
 | `notat möte "Titel"` | namnge mötet och ange deltagare (se nedan) |
+| `notat namn` | kända röster: visa, slå på/av, spara en röst från en fil |
+| `notat glöm <Namn>` | radera en röstprofil |
 | `notat stop --no-summary` | hoppa över AI-sammanfattningen |
 
 **Bar-knappen** (`custom.notat`, mikrofonikonen): vänsterklick startar/stoppar och visar
@@ -156,6 +158,48 @@ deltagarlistan hamnar i dokumentet utan nya steg. `--namn` gäller den transkrib
 kommer: sätt det medan du spelar in, eller kör `notat transcribe <mapp>` igen efteråt.
 Ett namn byter bara etiketten — spårnumret bakom (`who#nr`) bär dubblett- och ekologiken,
 och `Du`/`Mötet` döps aldrig om.
+
+## Kända röster: namnet följer rösten
+
+`Deltagare 1` gäller en inspelning. Vill man att namnet ska följa rösten mellan möten
+namnger man talaren **en gång** — det gör man redan med `notat möte --namn "1=Ada"` —
+och då sparas rösten:
+
+```bash
+notat möte --namn "1=Ada" --mapp <inspelningsmapp>   # namnger + sparar rösten
+notat transcribe <mapp>                              # dokumentet skrivs med namnet
+notat namn                                           # visa registret
+notat namn på|av                                     # slå namnbytet på/av
+notat namn Ada ~/röstprov/ada.wav                    # spara en röst från en fil (16 kHz mono)
+notat glöm Ada                                       # radera röstprofilen
+```
+
+Nästa inspelning där Ada pratar får namnet av sig själv — i dokumentet märkt
+`Ada (röst)` för att det är en matchning och inte ett namn du skrivit. Hittas ingen känd
+röst står `Deltagare N` kvar: ingen gissning. `notat devices` visar registret och `på`.
+
+**Mekaniken** är sherpa-binären som redan ligger i `~/.local/share/notat/diar/` — ingen ny
+modell, inget nytt att installera, inget skickas någonstans. Referensrösten och en okänd
+tur läggs i samma fil med en sekunds tystnad emellan; kör diariseringen och se om turen
+hamnar i samma kluster som referensen. Kostnad: ~1,4 s per okänd röst i en inspelning.
+
+**Mätt på `diarprov/`** (16 turer, två syntetiska röster):
+
+| Prov | Resultat |
+|---|---|
+| Samma röst mot olika, isolerat (`tur00`+`tur02` / `tur00`+`tur01`) | 1 kluster / 2 kluster — 4/4 rätt |
+| Okänd tur mot två referenser, 14 turer, tröskelsvep | **14/14 för 0,6–0,8**; 13/14 vid sherpas standard 0,5; 10/14 vid 0,9 |
+
+Tröskeln är ratten, och plattån är bred: under 0,5 spricker talaren i flera kluster, över
+0,9 slås **referensrösterna** ihop (mätt: 14/14 vid 1,0) och då blir alla samma person.
+`NOTAT_RÖST_TRÖSKEL` (standard 0,7) ligger mitt i plattån. Mätt med en egen
+embedding-kedja (`onnxruntime` + `numpy`, samma TitaNet-modell): samma röst +0,87 i cosinus
+mot olika +0,33 — men det kräver ett paket som inte finns i repot, så vägen ovan valdes.
+
+**Gränsen, ärligt:** två syntetiska röster i en ren inspelning. Fler röster, sämre
+mikrofoner, överhörning och en röst som ändras över tid är inte mätt — därför är namnet
+märkt `(röst)` i dokumentet, matchningen kan stängas av, och röstprofilerna ligger i
+`~/.local/share/notat/röster/` med 0600 (katalogen 0700) och raderas med `notat glöm`.
 
 ## Var sakerna hamnar
 

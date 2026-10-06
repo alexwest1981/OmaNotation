@@ -465,6 +465,48 @@ def test_mote_ger_titel_och_deltagare_i_dokumentet():
         shutil.rmtree(d)
 
 
+def test_röst_traffen_och_referensfilen():
+    """Röstregistret: rätt referens vinner, tvekan ger inget namn, och filen skrivs skyddat."""
+    import shutil
+    # två referenser (0-6 s = Ada, 7-13 s = Bo) och en okänd bit (14-20 s)
+    fönster = [(0.0, 6.0), (7.0, 13.0), (14.0, 20.0)]
+    seg = [(0.0, 6.0, "speaker_00"), (7.0, 13.0, "speaker_01"), (14.0, 20.0, "speaker_00")]
+    assert notat.röst_träff(seg, fönster) == 0, "samma kluster som referens 0 -> Ada"
+    seg[2] = (14.0, 20.0, "speaker_01")
+    assert notat.röst_träff(seg, fönster) == 1
+    seg[2] = (14.0, 20.0, "speaker_02")
+    assert notat.röst_träff(seg, fönster) is None, "eget kluster -> ingen gissning"
+    assert notat.röst_träff([(0.0, 6.0, "speaker_00")], [(0.0, 6.0), (7.0, 13.0)]) is None
+
+    tmp = tempfile.mkdtemp()
+    gammal = notat.RÖST_ROOT
+    notat.RÖST_ROOT = os.path.join(tmp, "röster")
+    try:
+        import math
+        import wave
+        tyst = b"\x00\x00" * 16000 * 3
+        ton = b"".join(int(12000 * math.sin(2 * math.pi * 220 * i / 16000)).to_bytes(2, "little", signed=True)
+                       for i in range(16000 * 4))
+        med_tyst = os.path.join(tmp, "med_tyst.wav")
+        with wave.open(med_tyst, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+            w.writeframes(tyst + ton)
+        assert notat.spara_röst("Ada", med_tyst) is True
+        path = os.path.join(notat.RÖST_ROOT, "Ada.wav")
+        assert os.path.exists(path) and os.stat(path).st_mode & 0o777 == 0o600, "röstprofilen ska vara 0600"
+        a, b = notat.bästa_klipp(med_tyst, notat.envelope(med_tyst)[0])
+        assert a >= 2.5, f"tystnaden får inte bli röstprofilen (valde {a:.1f}s)"
+        assert notat.referenser() == [("Ada", path)], notat.referenser()
+        längd = os.path.getsize(path)
+        assert notat.spara_röst("Ada", med_tyst) is False, "kortare prov ska inte skriva över"
+        assert os.path.getsize(path) == längd
+        assert notat.cmd_glöm({"_": ["Ada"]}) == 0 and not os.path.exists(path)
+        assert notat.cmd_glöm({"_": ["Ada"]}) == 1, "borttagen röst ska säga till"
+    finally:
+        notat.RÖST_ROOT = gammal
+        shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
