@@ -13,6 +13,7 @@
   notat röster på|av     skilj talare åt i dokumentet (Deltagare 1, 2 ...)
   notat diar-hamta       ladda ner talaruppdelningen (~70 MB)
   notat transcribe <mapp>   transkribera en tidigare inspelning igen
+  notat möte "Titel"        namnge mötet: --deltagare "A,B", --namn "1=A" (se nedan)
   notat devices    visa vilka enheter som används (och vilka som valts bort)
 """
 import bisect
@@ -283,6 +284,18 @@ def diar_etiketter(turer, dominant=None, bas=0):
             ut[talare] = f"Deltagare {bas + n}"
             n += 1
     return ut
+
+
+def byt_talarnamn(etiketter, namn):
+    """'Deltagare 1' -> the name the user gave ('1=Ada' and 'Deltagare 1=Ada' both work).
+
+    Only the display label changes. The track number in who#nr is what the duplicate
+    and echo logic hangs on, and 'Du'/'Mötet' are never renamed.
+    """
+    if not namn:
+        return etiketter
+    return {spk: namn.get(lbl) or namn.get(lbl.split(" ")[-1]) or lbl
+            for spk, lbl in etiketter.items()}
 
 
 def talare_vid(turer, etiketter, start, slut):
@@ -615,6 +628,27 @@ def notify(title, body):
         subprocess.Popen(["notify-send", "-a", "notat", title, body])
 
 
+def läs_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def skriv_atomiskt(path, text):
+    """Skriv till en temp-fil och byt namn.
+
+    Temp + os.replace: en krasch mitt i skrivningen får inte lämna ett halvt
+    dokument (anteckningen blir tom/trunkerad) eller en halv session.json (som
+    då ser ut som "ingen inspelning").
+    """
+    tmp = path + ".del"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
 # ------------------------------------------------------------------ start/stopp
 
 def cmd_start(_args):
@@ -659,9 +693,9 @@ def cmd_start(_args):
         return 1
     info = {"started": time.time(), "dir": outdir, "tracks": live, "pid": live[0]["pid"]}
     os.makedirs(STATE, exist_ok=True)
+    text = json.dumps(info, ensure_ascii=False)
     for path in (SESSION, os.path.join(outdir, "session.json")):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(info, f)
+        skriv_atomiskt(path, text)
     names = ", ".join(t["desc"] for t in live)
     notify("Spelar in", f"{len(live)} enheter: {names[:70]}")
     log(f"start {outdir} {len(live)}/{len(started)} enheter: {names}")
@@ -1038,6 +1072,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     vad = find_vad()
     röster = röster_på()
     antal_talare = int(notat_config().get("antal_talare") or 0)
+    namn = meta.get("names") or {}
     all_segs = []
     failures = []
     kallor = []
@@ -1062,8 +1097,9 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
                 stämplar = diar_etiketter(turer, dominant="Du" if who.startswith("Du") else None,
                                           bas=talarräknare)
                 dian[i] = turer
-                etiketter[i] = stämplar
+                # numreringen räknas på de råa etiketterna: ett namn får inte flytta nästa spårs nummer
                 talarräknare += sum(1 for v in stämplar.values() if v.startswith("Deltagare"))
+                etiketter[i] = byt_talarnamn(stämplar, namn)
             else:
                 failures.append(f"{desc}: talaruppdelningen misslyckades ({diarfel})")
                 log(f"diarisering av {f}: {diarfel}")
@@ -1086,11 +1122,14 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
         when = datetime.strptime(stamp[:16], "%Y-%m-%d %H-%M").strftime("%Y-%m-%d %H:%M")
     except ValueError:
         when = stamp
-    title = f"Möte {stamp}"
+    title = (meta.get("title") or "").strip() or f"Möte {stamp}"
+    title = title.replace("/", "-")        # rubriken blir också filnamn
     lines = [f"# {title}", "",
              f"**Inspelat:** {when} · {mmss(seconds)} · "
              f"{'VAD' if vad else 'ingen VAD'} · {'röster · ' if etiketter else ''}"
              f"modell {modell_namn(model)}", ""]
+    if meta.get("participants"):
+        lines += [f"**Deltagare:** {' · '.join(meta['participants'])}", ""]
     if kallor:
         lines += [f"**Källor:** {' · '.join(kallor)}", ""]
     if etiketter:
@@ -1124,8 +1163,8 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
     while os.path.exists(path):
         path = os.path.join(dest, f"{title} {n}.md")
         n += 1
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
+    skriv_atomiskt(path, content)
+
     notify("Anteckning klar", f"{os.path.basename(path)} · {len(paras)} stycken")
 
     # Sammanfattningen hämtas EFTER att dokumentet skrivits: en seg eller död
@@ -1141,8 +1180,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
                 marker = "## Transkription"
                 if marker in current:
                     head, rest = current.split(marker, 1)
-                    with open(path, "w", encoding="utf-8") as f:
-                        f.write(head + "## Sammanfattning\n\n" + txt + "\n\n" + marker + rest)
+                    skriv_atomiskt(path, head + "## Sammanfattning\n\n" + txt + "\n\n" + marker + rest)
                 log(f"sammanfattning inlagd ({len(txt)} tecken)")
             except OSError as e:
                 log(f"kunde inte lägga in sammanfattningen: {e}")
@@ -1221,6 +1259,72 @@ def cmd_devices(_args):
     return 0
 
 
+def senaste_raw():
+    """Senaste inspelningsmappen - 'notat möte' utan pågående inspelning gäller den."""
+    try:
+        mappar = sorted(d for d in os.listdir(RAW_ROOT)
+                        if os.path.isdir(os.path.join(RAW_ROOT, d)))
+    except OSError:
+        return None
+    return os.path.join(RAW_ROOT, mappar[-1]) if mappar else None
+
+
+def namn_par(text):
+    """'1=Ada, Deltagare 2=Bo' -> {'Deltagare 1': 'Ada', 'Deltagare 2': 'Bo'}"""
+    ut = {}
+    for par in (text or "").split(","):
+        nyckel, lika, värde = par.partition("=")
+        nyckel, värde = nyckel.strip(), värde.strip()
+        if lika and värde:
+            ut[nyckel if not nyckel.isdigit() else f"Deltagare {nyckel}"] = värde
+    return ut
+
+
+def cmd_möte(args):
+    """Titel och deltagare för en inspelning - skrivs i dess session.json.
+
+    Det är samma fil transkriberingen läser, så namnen hamnar i dokumentet utan
+    nya steg. Utan pågående inspelning gäller senaste mappen (svaret säger vilken).
+    """
+    sess = load_session()
+    mapp = args.get("mapp") or (sess.get("dir") if running(sess) else None) or senaste_raw()
+    if not mapp:
+        print(json.dumps({"ok": False, "error": "ingen inspelning hittad"}, ensure_ascii=False))
+        return 1
+    meta_path = os.path.join(mapp, "session.json")
+    meta = läs_json(meta_path)
+    if meta is None:
+        print(json.dumps({"ok": False, "error": f"{mapp} har ingen läsbar session.json"},
+                         ensure_ascii=False))
+        return 1
+    titel = args["_"][0] if args["_"] else args.get("titel")
+    saknar = [k for k in ("titel", "deltagare", "namn", "mapp") if args.get(k) is True]
+    if saknar:      # --deltagare utan värde ska säga det, inte tigas bort
+        print(json.dumps({"ok": False, "error": "värde saknas till " +
+                          ", ".join("--" + k for k in saknar)}, ensure_ascii=False))
+        return 1
+    if isinstance(titel, str) and titel.strip():
+        meta["title"] = titel.strip()
+    if isinstance(args.get("deltagare"), str):
+        meta["participants"] = [n.strip() for n in args["deltagare"].split(",") if n.strip()]
+    if isinstance(args.get("namn"), str):
+        meta["names"] = {**(meta.get("names") or {}), **namn_par(args["namn"])}
+    if args.get("rensa"):
+        for nyckel in ("title", "participants", "names"):
+            meta.pop(nyckel, None)
+    try:
+        skriv_atomiskt(meta_path, json.dumps(meta, ensure_ascii=False))
+    except OSError as e:
+        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        return 1
+    log(f"möte {mapp}: title={meta.get('title')!r} deltagare={meta.get('participants')} "
+        f"namn={meta.get('names')}")
+    print(json.dumps({"ok": True, "dir": mapp, "title": meta.get("title"),
+                      "participants": meta.get("participants") or [],
+                      "names": meta.get("names") or {}}, ensure_ascii=False))
+    return 0
+
+
 def cmd_toggle(_args):
     sess = load_session()
     return cmd_stop({}) if running(sess) else cmd_start({})
@@ -1233,14 +1337,28 @@ def main(argv):
     if not argv:
         return cmd_toggle({})
     cmd, rest = argv[0], argv[1:]
-    flags = {"_": [a for a in rest if not a.startswith("--")]}
-    for a in rest:
+    # --nyckel=värde och --nyckel värde; bara de som tar ett värde får sluka nästa ord,
+    # så --wait/--json/--rensa fortsätter vara rena växlar.
+    värde_flagg = ("titel", "deltagare", "namn", "mapp")
+    flags = {"_": []}
+    i = 0
+    while i < len(rest):
+        a = rest[i]
         if a.startswith("--"):
-            flags[a[2:]] = True
+            nyckel, lika, värde = a[2:].partition("=")
+            nästa = rest[i + 1] if i + 1 < len(rest) else None
+            if not lika and nyckel in värde_flagg and nästa is not None and not nästa.startswith("--"):
+                lika, värde = "=", nästa
+                i += 1
+            flags[nyckel] = värde if lika else True
+        else:
+            flags["_"].append(a)
+        i += 1
     table = {"start": cmd_start, "stop": cmd_stop, "status": cmd_status,
              "transcribe": cmd_transcribe, "devices": cmd_devices, "toggle": cmd_toggle,
              "valj": cmd_valj, "modeller": cmd_modeller, "modell": cmd_modell,
-             "hamta": cmd_hamta, "röster": cmd_röster, "diar-hamta": cmd_diar_hamta}
+             "hamta": cmd_hamta, "röster": cmd_röster, "diar-hamta": cmd_diar_hamta,
+             "möte": cmd_möte}
     if cmd in ("-h", "--help", "help"):
         print(USAGE)
         return 0

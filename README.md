@@ -42,6 +42,7 @@ cp build/bin/whisper-cli ~/.local/bin/
 | `notat röster på\|av` | skilj talarna åt i dokumentet (Deltagare 1, 2 …) |
 | `notat diar-hamta` | ladda ner talaruppdelningen (~70 MB) |
 | `notat transcribe <mapp>` | gör om en tidigare inspelning (t.ex. med bättre modell) |
+| `notat möte "Titel"` | namnge mötet och ange deltagare (se nedan) |
 | `notat stop --no-summary` | hoppa över AI-sammanfattningen |
 
 **Bar-knappen** (`custom.notat`, mikrofonikonen): vänsterklick startar/stoppar och visar
@@ -133,9 +134,33 @@ etiketten blir en gissning. `notat diar-hamta` hämtar modellerna (install.sh g�
 - **Kostnad:** cirka 0,2 × inspelningens längd i CPU-tid (en timme ≈ 12 minuter extra) — därför
   är växeln av/på och står i menyn.
 
+## Mötets titel och deltagare
+
+Mötesapparna på Linux lämnar inget pålitligt lokalt: Zooms databaser är krypterade
+(`~/.zoom/data` har bara `experiment`-tabeller i klartext), Discord har ingen
+deltagarlista i något läsbart format, och tillgänglighetsbussen (AT-SPI) är avstängd
+som standard. `notat` gissar därför inte — du skriver namnen:
+
+```bash
+notat möte "Systemarkitektur 3"            # titeln blir dokumentets rubrik
+notat möte --deltagare "Ada, Bo"           # **Deltagare:** i dokumentet
+notat möte --namn "1=Ada, 2=Bo"            # Deltagare 1/2 i utskriften blir namnen
+notat möte --rensa                         # ta bort titel, deltagare och namn
+notat möte --mapp <inspelningsmapp>        # peka ut en äldre inspelning
+```
+
+Utan argument visar kommandot vilket möte det gäller. Utan pågående inspelning är det
+**senaste** mappen i `~/.local/share/notat/raw/`, och svaret säger vilken. Filerna
+skrivs i inspelningens `session.json` — samma fil transkriberingen läser — så titeln och
+deltagarlistan hamnar i dokumentet utan nya steg. `--namn` gäller den transkribering som
+kommer: sätt det medan du spelar in, eller kör `notat transcribe <mapp>` igen efteråt.
+Ett namn byter bara etiketten — spårnumret bakom (`who#nr`) bär dubblett- och ekologiken,
+och `Du`/`Mötet` döps aldrig om.
+
 ## Var sakerna hamnar
 
-- **Dokument:** `<valv>/Inspelningar/Möte ÅÅÅÅ-MM-DD TT-MM.md`. Valvet är `valv` i
+- **Dokument:** `<valv>/Inspelningar/Möte ÅÅÅÅ-MM-DD TT-MM.md` (titeln du satte med
+  `notat möte` blir filnamn i stället). Valvet är `valv` i
   `~/.config/notat/config.json`, annars `vault_root` ur `~/.config/omascribe/config.json`,
   annars `~/Documents/OmaScribe Vault`, annars `~/Documents/Anteckningar`.
   Formen: `## Sammanfattning` (punkter + Beslut/Uppgifter/Nyckelbegrepp), `## Transkription`
@@ -183,7 +208,7 @@ Utan VAD-modellen hittar whisper på text i tystnaden. Mätt: 5 minuter digital 
 ## Test
 
 ```bash
-python3 test_notat.py              # ren logik: segment, stycken, ljuddubbletter, enheter, modellval, talaretiketter (20/20)
+python3 test_notat.py              # ren logik: segment, stycken, ljuddubbletter, enheter, modellval, talaretiketter, titel/deltagare (26/26)
 NOTAT_NATVERK=1 python3 test_notat.py   # + att varje nedladdnings-URL ger en riktig fil
 bash tools/e2e.sh                  # ände-till-ände via virtuell sink (inget ljud i rummet)
 python3 tools/jamfor.py tools/facit.wav tools/facit.txt kb-whisper-small   # WER mot känd text

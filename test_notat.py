@@ -399,6 +399,72 @@ def test_speaker_list_only_shows_voices_in_the_text():
     assert notat.talare_i_texten([(0, 1, "Mötet#1", "bara mötet")]) == []
 
 
+def test_namn_pa_talarna_ror_inte_spar_numret():
+    """Ett namn byter bara etiketten: who#nr bär dubblett- och ekologiken."""
+    etiketter = {"speaker_01": "Deltagare 1", "speaker_00": "Deltagare 2"}
+    assert notat.byt_talarnamn(etiketter, None) == etiketter
+    bytt = notat.byt_talarnamn(etiketter, {"Deltagare 1": "Ada"})
+    assert bytt == {"speaker_01": "Ada", "speaker_00": "Deltagare 2"}, bytt
+    assert notat.byt_talarnamn(etiketter, {"1": "Ada"})["speaker_01"] == "Ada"   # '1=Ada' också
+    assert notat.byt_talarnamn(etiketter, {"Deltagare 9": "Ada"}) == etiketter, "fel nyckel rör inget"
+    assert notat.namn_par("1=Ada, Deltagare 2=Bo") == {"Deltagare 1": "Ada", "Deltagare 2": "Bo"}
+    assert notat.namn_par("strunt") == {} and notat.namn_par("1=") == {}
+
+    segs = [(1.0, 9.0, "Mötet#2", "hej")]
+    assert notat.märk_segment(segs, [(0, 10, "speaker_01")], bytt)[0][2] == "Ada#2"
+
+
+def test_mote_ger_titel_och_deltagare_i_dokumentet():
+    """notat möte -> session.json -> dokumentets rubrik. Utan ljud: spåren saknas med flit."""
+    import shutil
+    gammal = (notat.RAW_ROOT, notat.STATE, notat.SESSION, notat.JOB, notat.notify, notat.log)
+    d = tempfile.mkdtemp()
+    raw = os.path.join(d, "raw", "2026-10-06 09-00")
+    os.makedirs(raw)
+    spår = [{"file": "ut1.wav", "label": "Mötet", "desc": "högtalare", "node": "x.monitor", "pid": 0},
+            {"file": "in2.wav", "label": "Du", "desc": "mic", "node": "y", "pid": 0}]
+    with open(os.path.join(raw, "session.json"), "w", encoding="utf-8") as f:
+        json.dump({"started": 1.0, "dir": raw, "pid": 0, "tracks": spår}, f)
+    notat.RAW_ROOT = os.path.join(d, "raw")
+    notat.STATE = os.path.join(d, "state")
+    os.makedirs(notat.STATE)
+    notat.SESSION = os.path.join(notat.STATE, "session.json")
+    notat.JOB = os.path.join(notat.STATE, "transcription.json")
+    notat.notify = lambda *a, **k: None            # ingen notis på skrivbordet under provet
+    notat.log = lambda *a, **k: None
+    gammalt_valv = os.environ.get("NOTAT_VAULT")
+    try:
+        assert notat.cmd_möte({"_": ["Designgenomgång"], "deltagare": "Ada, Bo", "namn": "1=Ada"}) == 0
+        sparad = json.load(open(os.path.join(raw, "session.json"), encoding="utf-8"))
+        assert sparad["title"] == "Designgenomgång", sparad
+        assert sparad["participants"] == ["Ada", "Bo"], sparad
+        assert sparad["names"] == {"Deltagare 1": "Ada"}, sparad
+        assert sparad["tracks"] == spår, "spåren får inte röras"
+        assert not os.path.exists(os.path.join(raw, "session.json.del")), "tempfil kvar"
+
+        try:
+            notat.find_model()
+        except SystemExit:
+            return                     # ingen whisper-modell -> dokumentet kan inte byggas här
+        os.environ["NOTAT_VAULT"] = os.path.join(d, "valv")
+        path = notat.transcribe_dir(raw, 10, sammanfatta=False)
+        text = open(path, encoding="utf-8").read()
+        assert text.startswith("# Designgenomgång"), text[:200]
+        assert "**Deltagare:** Ada · Bo" in text, text[:400]
+        assert os.path.basename(path).startswith("Designgenomgång"), path
+        assert not os.path.exists(path + ".del"), "tempfil kvar efter dokumentskrivningen"
+
+        assert notat.cmd_möte({"_": [], "rensa": True}) == 0
+        assert "title" not in json.load(open(os.path.join(raw, "session.json"), encoding="utf-8"))
+    finally:
+        if gammalt_valv is None:
+            os.environ.pop("NOTAT_VAULT", None)
+        else:
+            os.environ["NOTAT_VAULT"] = gammalt_valv
+        notat.RAW_ROOT, notat.STATE, notat.SESSION, notat.JOB, notat.notify, notat.log = gammal
+        shutil.rmtree(d)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
