@@ -10,6 +10,19 @@ an AI summary. Bar widget in Omarchy; right-click picks sources, model and downl
 
 ## Installation
 
+Omarchy lägger bar-knappen i `~/.config/omarchy/plugins/<id>` med `omarchy plugin add`, men
+kommandot `notat`, modellerna och VAD-modellen installeras av `install.sh` — därför står
+listningen som *Manual setup*:
+
+```bash
+omarchy plugin add https://github.com/alexwest1981/OmaNotation.git --enable
+~/.config/omarchy/plugins/io.github.alexwest1981.omanotation/install.sh
+```
+
+Utan Omarchy (vilken Linux som helst): klona repot och kör `install.sh` — den länkar
+kommandot till `~/.local/bin/notat`, hämtar VAD-modellen och en whisper-modell och kopierar
+bar-knappen om Omarchy finns:
+
 ```bash
 git clone https://github.com/alexwest1981/OmaNotation.git
 cd OmaNotation
@@ -17,14 +30,14 @@ cd OmaNotation
 ./install.sh --ingen-modell        # om du redan har en modell
 ```
 
-Kräver `python3` (bara stdlib), `ffmpeg`, PipeWire (`pactl`) och `whisper-cli` i PATH —
-bygg whisper.cpp med CUDA för din maskin:
+Pluginen ligger i repots rot (`manifest.json` + `BarWidget.qml`) — den layout Omarchys
+marknadsplats kräver. `install.sh` kopierar inte in i en plugin-mapp som Omarchy själv har
+hämtat (den ligger under git och uppdateras med `omarchy plugin update io.github.alexwest1981.omanotation`).
 
-```bash
-git clone https://github.com/ggml-org/whisper.cpp && cd whisper.cpp
-cmake -B build -DGGML_CUDA=ON && cmake --build build --config Release -j
-cp build/bin/whisper-cli ~/.local/bin/
-```
+Kräver `python3` (bara stdlib), `ffmpeg`, PipeWire (`pactl`) och `whisper-cli` i PATH —
+bygg whisper.cpp för din maskin enligt [dess egen byggbeskrivning](https://github.com/ggml-org/whisper.cpp)
+och lägg `whisper-cli` i `~/.local/bin`. CUDA-flaggan (`-DGGML_CUDA=ON`) är vad farttabellen
+nedan mäter: 26× realtid på en RTX 3060 Ti mot någon enstaka gång på CPU.
 
 ## Användning
 
@@ -49,7 +62,7 @@ cp build/bin/whisper-cli ~/.local/bin/
 | `notat senaste [--öppna]` | sökvägen till det senast skrivna dokumentet |
 | `notat stop --no-summary` | hoppa över AI-sammanfattningen |
 
-**Bar-knappen** (`custom.notat`, mikrofonikonen): vänsterklick startar/stoppar och visar
+**Bar-knappen** (`io.github.alexwest1981.omanotation`, mikrofonikonen): vänsterklick startar/stoppar och visar
 en räknare. **Högerklick** öppnar menyn i tre avsnitt: **Källor att spela in** (slå av/på
 enheter), **Modell** (byt modell, nedladdning sköts automatiskt om den saknas) och
 **Röster** (särskilj talarna). Klick utanför stänger menyn. Ändringar i menyn gäller nästa
@@ -279,7 +292,7 @@ ffmpeg -i /tmp/f.mp3 -ac 1 -ar 16000 tools/facit.wav
 | Påhittad text i pauserna | VAD-modellen saknas i `~/.local/share/notat/models/` |
 | "hittar ingen whisper-modell" | välj/ladda ner en i bar-menyn, eller `notat hamta kb-whisper-small` |
 | Ingen text alls, inspelningen är tyst | fel enhet vald i menyn — `python3 tools/spar.py <mapp>` visar dB per spår |
-| Bar-knappen syns inte | `omarchy plugin enable custom.notat`, sedan `omarchy-restart-shell` |
+| Bar-knappen syns inte | `omarchy plugin enable io.github.alexwest1981.omanotation`, sedan `omarchy-restart-shell` |
 | Inget dokument efter stoppet | `notat status --json` säger om jobbet lever; barnets utskrift ligger i `~/.local/share/notat/raw/<mapp>/transcription.log`. Kör om med `notat transcribe "<mapp>"` |
 
 ## Licens

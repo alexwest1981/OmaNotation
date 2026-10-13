@@ -6,7 +6,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "custom.notat"
+  moduleName: "io.github.alexwest1981.omanotation"
 
   readonly property string bin: Quickshell.env("HOME") + "/.local/bin/notat"
   readonly property string vaultDir: Quickshell.env("HOME") + "/Documents/OmaScribe Vault/Inspelningar"

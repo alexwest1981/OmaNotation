@@ -48,14 +48,20 @@ if [ "${1:-}" != "--ingen-modell" ]; then
 fi
 
 # 5. bar-knappen (Omarchy). Måste vara en riktig mapp - validate vägrar symlänkar.
+#    Är den hämtad av `omarchy plugin add` ligger den under git och uppdateras med
+#    `omarchy plugin update <id>` - kopiera inte in i den, det gör trädet smutsigt.
+PLUG="$HOME/.config/omarchy/plugins/io.github.alexwest1981.omanotation"
 if [ -d "$HOME/.config/omarchy/plugins" ]; then
-  PLUG="$HOME/.config/omarchy/plugins/custom.notat"
-  mkdir -p "$PLUG"
-  cp "$ROT/bar/custom.notat/BarWidget.qml" "$ROT/bar/custom.notat/manifest.json" "$PLUG/"
-  omarchy plugin enable custom.notat >/dev/null 2>&1 || true
+  if [ -d "$PLUG/.git" ]; then
+    echo "bar-knappen är hämtad av Omarchy ($PLUG)"
+    echo "  uppdatera den med: omarchy plugin update io.github.alexwest1981.omanotation"
+  else
+    mkdir -p "$PLUG"
+    cp "$ROT/BarWidget.qml" "$ROT/manifest.json" "$PLUG/"
+    echo "bar-knappen kopierad till $PLUG (högerklick på mikrofonikonen väljer källor, modell och röster)"
+  fi
+  omarchy plugin enable io.github.alexwest1981.omanotation >/dev/null 2>&1 || true
   omarchy-restart-shell >/dev/null 2>&1 || true
-  echo "bar-knappen installerad (högerklick på mikrofonikonen väljer källor, modell och röster)"
-  echo "  uppdatera senare genom att köra ./install.sh igen (filerna kopieras)"
 fi
 
 echo
