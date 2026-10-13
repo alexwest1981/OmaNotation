@@ -1,240 +1,253 @@
-# OmaNotation (kommandot: `notat`)
+# OmaNotation (command: `notat`)
 
-Mötes- och föreläsningsantecknare för Linux/Omarchy. Lyssnar på **båda ljudsidorna**
-(mötet via ljudutgångarnas monitor, du via mikrofonerna), transkriberar med whisper.cpp
-och skriver ett dokument när du stoppar. En knapp i Omarchys toppbar startar och stoppar.
+Meeting and lecture note taker for Linux/Omarchy. It records **both audio sides** (the meeting
+from each output's monitor, you from the microphones), transcribes with whisper.cpp and writes a
+markdown document when you stop. A button in the Omarchy bar starts and stops it; right-click
+picks sources, model and downloads.
 
-*Meeting/lecture note taker for Linux: records every audio output and input, transcribes
-with whisper.cpp (Swedish-tuned KB-Whisper recommended), writes a markdown document with
-an AI summary. Bar widget in Omarchy; right-click picks sources, model and downloads.*
+![A meeting room with the notes OmaNotation writes](meeting-notes.jpg)
+
+(The images in this repository are illustrations, not screenshots of the widget.)
 
 ## Installation
 
-Omarchy lägger bar-knappen i `~/.config/omarchy/plugins/<id>` med `omarchy plugin add`, men
-kommandot `notat`, modellerna och VAD-modellen installeras av `install.sh` — därför står
-listningen som *Manual setup*:
+Omarchy puts the bar widget in `~/.config/omarchy/plugins/<id>` with `omarchy plugin add`, but the
+`notat` command, the models and the VAD model are installed by `install.sh` — which is why the
+listing is *Manual setup*:
 
 ```bash
 omarchy plugin add https://github.com/alexwest1981/OmaNotation.git --enable
 ~/.config/omarchy/plugins/io.github.alexwest1981.omanotation/install.sh
 ```
 
-Utan Omarchy (vilken Linux som helst): klona repot och kör `install.sh` — den länkar
-kommandot till `~/.local/bin/notat`, hämtar VAD-modellen och en whisper-modell och kopierar
-bar-knappen om Omarchy finns:
+Anywhere else (any Linux): clone the repository and run `install.sh` — it links the command into
+`~/.local/bin/notat`, downloads the VAD model and one whisper model, and installs the bar widget
+if Omarchy is present:
 
 ```bash
 git clone https://github.com/alexwest1981/OmaNotation.git
 cd OmaNotation
-./install.sh                       # kommando + VAD-modell + kb-whisper-small + bar-knapp
-./install.sh --ingen-modell        # om du redan har en modell
+./install.sh                       # command + VAD model + kb-whisper-small + bar widget
+./install.sh --ingen-modell        # if you already have a model
 ```
 
-Pluginen ligger i repots rot (`manifest.json` + `BarWidget.qml`) — den layout Omarchys
-marknadsplats kräver. `install.sh` kopierar inte in i en plugin-mapp som Omarchy själv har
-hämtat (den ligger under git och uppdateras med `omarchy plugin update io.github.alexwest1981.omanotation`).
+The plugin lives in the repository root (`manifest.json` + `BarWidget.qml`), the layout the
+Omarchy plugin marketplace requires. `install.sh` does not copy into a plugin folder that Omarchy
+fetched itself (that folder is under git and is updated with
+`omarchy plugin update io.github.alexwest1981.omanotation`).
 
-Kräver `python3` (bara stdlib), `ffmpeg`, PipeWire (`pactl`) och `whisper-cli` i PATH —
-bygg whisper.cpp för din maskin enligt [dess egen byggbeskrivning](https://github.com/ggml-org/whisper.cpp)
-och lägg `whisper-cli` i `~/.local/bin`. CUDA-flaggan (`-DGGML_CUDA=ON`) är vad farttabellen
-nedan mäter: 26× realtid på en RTX 3060 Ti mot någon enstaka gång på CPU.
+Requires `python3` (stdlib only), `ffmpeg`, PipeWire (`pactl`) and `whisper-cli` in `PATH` — build
+whisper.cpp for your machine following
+[its own build documentation](https://github.com/ggml-org/whisper.cpp) and put `whisper-cli` in
+`~/.local/bin`. The CUDA flag (`-DGGML_CUDA=ON`) is what the speed table below measures: 26×
+realtime on an RTX 3060 Ti, against roughly 1× on CPU.
 
-## Användning
+## Usage
 
-| Kommando | Vad det gör |
+| Command | What it does |
 |---|---|
-| `notat` | startar om inget spelas in, stoppar + transkriberar annars |
-| `notat start` / `notat stop` | samma sak, uttryckligen |
-| `notat stop --wait` | vänta på dokumentet i stället för att lämna ifrån sig jobbet |
-| `notat status [--json]` | läget (baren pollar den här) |
-| `notat devices` | enheter, modell och valv som används |
-| `notat valj <enhet>` | slå av/på en enhet (`notat valj alla` = allt på) |
-| `notat modeller` | modellerna, vilken som är vald och vilka som finns nedladdade |
-| `notat modell <id>` | byt modell |
-| `notat hamta <id>` | ladda ner en modell (procent per rad) |
-| `notat röster på\|av` | skilj talarna åt i dokumentet (Deltagare 1, 2 …) |
-| `notat diar-hamta` | ladda ner talaruppdelningen (~70 MB) |
-| `notat transcribe <mapp>` | gör om en tidigare inspelning (t.ex. med bättre modell) |
-| `notat möte "Titel"` | namnge mötet och ange deltagare (se nedan) |
-| `notat namn` | kända röster: visa, slå på/av, spara en röst från en fil |
-| `notat glöm <Namn>` | radera en röstprofil |
-| `notat sök <ord>` | sök i mötesdokumenten (ripgrep mot valvet) |
-| `notat senaste [--öppna]` | sökvägen till det senast skrivna dokumentet |
-| `notat stop --no-summary` | hoppa över AI-sammanfattningen |
+| `notat` | starts if nothing is recording, otherwise stops + transcribes |
+| `notat start` / `notat stop` | the same thing, explicitly |
+| `notat stop --wait` | wait for the document instead of handing the job off |
+| `notat status [--json]` | the state (the bar polls this) |
+| `notat devices` | devices, model and vault in use |
+| `notat valj <device>` | toggle a device on/off (`notat valj alla` = everything on) |
+| `notat modeller` | the models, which one is selected and which are downloaded |
+| `notat modell <id>` | switch model |
+| `notat hamta <id>` | download a model (one percentage per line) |
+| `notat röster på\|av` | separate the speakers in the document (Deltagare 1, 2 …) |
+| `notat diar-hamta` | download the speaker separation (~70 MB) |
+| `notat transcribe <dir>` | redo an earlier recording (e.g. with a better model) |
+| `notat möte "Title"` | name the meeting and set participants (see below) |
+| `notat namn` | known voices: show, toggle, save a voice from a file |
+| `notat glöm <Name>` | delete a voice profile |
+| `notat sök <word>` | search the meeting documents (ripgrep over the vault) |
+| `notat senaste [--öppna]` | the path to the most recently written document |
+| `notat stop --no-summary` | skip the AI summary |
 
-**Bar-knappen** (`io.github.alexwest1981.omanotation`, mikrofonikonen): vänsterklick startar/stoppar och visar
-en räknare. **Högerklick** öppnar menyn i tre avsnitt: **Källor att spela in** (slå av/på
-enheter), **Modell** (byt modell, nedladdning sköts automatiskt om den saknas) och
-**Röster** (särskilj talarna). Klick utanför stänger menyn. Ändringar i menyn gäller nästa
-inspelning — en pågående inspelning rörs inte.
+**The bar button** (`io.github.alexwest1981.omanotation`, the microphone icon): left click starts
+and stops and shows a counter. **Right click** opens the menu in three sections: **Sources to
+record** (toggle devices), **Model** (switch model, the download runs by itself if one is
+missing) and **Voices** (separate the speakers). A click outside closes the menu. Menu changes
+apply to the next recording — a running recording is left alone.
 
-Stoppet svarar direkt: transkriberingen körs i **ett eget barn i en egen session**, inte
-som barn till bar-widgeten. En omladdning av pluginen (tema, redigerad granne,
-`omarchy-restart-shell`) dödar barn till widgeten — och gjorde det mitt i ett jobb: en
-29-minutersinspelning blev aldrig ett dokument. Barnet skriver
-`$XDG_RUNTIME_DIR/notat/transcription.json`, och det är den filen baren läser: räknaren
-står kvar som **transkriberar mm:ss** tills dokumentet finns. `notat stop --wait` väntar
-i stället (för skript och prov).
+The stop answers immediately: the transcription runs in **its own child process in its own
+session**, not as a child of the bar widget. A reload of the plugin (theme, edited neighbour,
+`omarchy-restart-shell`) kills children of the widget — and did so in the middle of a job: a
+29-minute recording never became a document. The child writes
+`$XDG_RUNTIME_DIR/notat/transcription.json`, and that is the file the bar reads: the counter
+stays at **transcribing mm:ss** until the document exists. `notat stop --wait` waits instead (for
+scripts and tests).
 
-## Var den lyssnar
+## Where it listens
 
-**Alla** ljudutgångar (deras monitor: allt som spelas upp — Zoom, video, musik) och **alla**
-ljudingångar (mikrofoner, line-in). En ffmpeg per enhet, en fil per enhet, så en enhet som
-dör (urkopplad USB, upptagen HDMI) inte fäller de andra.
+**Every** audio output (their monitor: everything that is played — Zoom, video, music) and
+**every** audio input (microphones, line-in). One ffmpeg per device, one file per device, so a
+device that dies (unplugged USB, busy HDMI) does not take the others down.
 
-Samma ljud fångat av flera enheter slås ihop genom att **jämföra ljudet, inte texten**
-(whisper skriver olika ord för samma mening beroende på vilken mikrofon som hörde den —
-mätt 0,4 i textlikhet för samma sekund). Kuverten jämförs med korrelation och
-fördröjningssökning, och den starkaste kopian behålls.
+The same audio captured by several devices is merged by **comparing the audio, not the text**
+(whisper writes different words for the same sentence depending on which microphone heard it —
+measured 0.4 in text similarity for the same second). The envelopes are compared with correlation
+and a delay search, and the strongest copy is kept.
 
-Styckesgränserna glider några sekunder mellan enheterna — whisper lägger samma mening på
-t.ex. 46–48 s i ena spåret och 48–52 s i det andra (mätt). Paren matchas därför på **närhet i
-tid**, och jämförelsen görs mot den andra enhetens ljud vid *samma* tidpunkt: 0,99 för samma
-mening, mot 0,57 med den gamla jämförelsen där dubbletten gick igenom. Att i stället jämföra
-ett gemensamt fönster duger inte — bär båda spåren samma ljud korrelerar vilket fönster som
-helst (mätt 0,99 även för två stycken 20 sekunder isär), så hela mötet skulle slås ihop.
+Paragraph boundaries drift a few seconds between devices — whisper places the same sentence at,
+say, 46–48 s on one track and 48–52 s on the other (measured). Pairs are therefore matched by
+**closeness in time**, and the comparison is made against the other device's audio at the *same*
+moment: 0.99 for the same sentence, against 0.57 with the old comparison where the duplicate got
+through. Comparing a shared window instead does not work — if both tracks carry the same audio,
+any window correlates (measured 0.99 even for two paragraphs 20 seconds apart), so the whole
+meeting would be merged into one paragraph.
 
-**Högtalare ger dubbletter som ingen heuristik kan ta bort.** Hör mikrofonen mötets ljud i
-rummet är mikrofonens ljud inte en kopia av utgången utan en blandning (din röst + mötet),
-och då står diskussionen två gånger. Dokumentet får en varning om det, med siffror:
+**Loudspeakers produce duplicates no heuristic can remove.** If the microphone hears the meeting
+through the room, the microphone's audio is not a copy of the output but a mix (your voice + the
+meeting), and then the discussion appears twice. The document gets a warning about it, with
+numbers:
 
 > [!warning] Mötets ljud hördes i rummet (1 av 2 mikrofonstycken är samma ljud som utgången) …
 
-Hörlurar (eller ekodämpning i mötesappen) ger en ren text. Mätt: mikrofon mot utgång ligger
-på 0,64–0,70 i korrelation när ljudet hörs i rummet, medan olika ljud samtidigt ligger under 0,3.
+Headphones (or echo cancellation in the meeting app) give clean text. Measured: microphone
+against output sits at 0.64–0.70 in correlation when the audio is heard in the room, while
+different audio at the same time stays below 0.3.
 
-Vill du hellre styra exakt: `NOTAT_SINK`/`NOTAT_SOURCE` låser inspelningen till två enheter.
+If you would rather control it exactly: `NOTAT_SINK`/`NOTAT_SOURCE` lock the recording to two
+devices.
 
-## Modeller (mätt, inte gissat)
+## Models (measured, not guessed)
 
-Whisper-modellerna väljs i bar-menyn eller med `notat modell <id>`. Katalogen innehåller
-KBLab:s svensktränade **KB-Whisper** och OpenAI:s flerspråkiga. Uppmätt på två svenska prov med
-känd text (272 och 342 ord, `tools/jamfor.py`) på en RTX 3060 Ti:
+The whisper models are picked in the bar menu or with `notat modell <id>`. The catalogue contains
+KBLab's Swedish-trained **KB-Whisper** and OpenAI's multilingual models. Measured on two Swedish
+samples with known text (272 and 342 words, `tools/jamfor.py`) on an RTX 3060 Ti:
 
-| Modell | Storlek | Prov 1 (119 s) | Prov 2 (143 s) | Fart |
+| Model | Size | Sample 1 (119 s) | Sample 2 (143 s) | Speed |
 |---|---|---|---|---|
-| **kb-whisper-small** | 466 MB | **4,2 %** | 5,0 % | 26× realtid |
-| kb-whisper-medium | 1,5 GB | 4,6 % | — | 18× |
-| kb-whisper-large-q5 | 1,1 GB | 6,5 % | — | 8× |
-| kb-whisper-large | 2,9 GB | 6,9 % | **3,8 %** | 11× |
-| openai-small | 466 MB | 8,0 % | 6,7 % | 25× |
+| **kb-whisper-small** | 466 MB | **4.2 %** | 5.0 % | 26× realtime |
+| kb-whisper-medium | 1.5 GB | 4.6 % | — | 18× |
+| kb-whisper-large-q5 | 1.1 GB | 6.5 % | — | 8× |
+| kb-whisper-large | 2.9 GB | 6.9 % | **3.8 %** | 11× |
+| openai-small | 466 MB | 8.0 % | 6.7 % | 25× |
 
-Läsningen: de svensktränade KB-Whisper-modellerna slår OpenAI small på båda proven, och
-small/large ligger nära varandra och **byter plats beroende på material** — small är standardvalet
-för farten (26× mot 11×). På prov 1 utelämnade large en hel mening ("Fördelen är att varje lager
-kan testas för sig"), en kvalitetsrisk som WER-siffran döljer.
+How to read it: the Swedish-trained KB-Whisper models beat OpenAI small on both samples, and
+small/large sit close together and **swap places depending on the material** — small is the
+default for speed (26× against 11×). On sample 1, large dropped a whole sentence ("Fördelen är
+att varje lager kan testas för sig"), a quality risk the WER figure hides.
 
-Mäter du själv: whisper.cpp:s `-nt` (utan tidsstämplar) slår ihop talet till några få klumpar —
-mätt 3 segment på 18–46 s för 110 s tal, mot 24 segment på 1–5 s med tidsstämplar — och flyttar
-WER-siffrorna flera procentenheter. `notat` använder inte flaggan, och `tools/jamfor.py` gör
-detsamma så att siffrorna går att jämföra.
+If you measure yourself: whisper.cpp's `-nt` (no timestamps) merges the speech into a few lumps —
+measured 3 segments at 18–46 s for 110 s of speech, against 24 segments at 1–5 s with timestamps —
+and moves the WER figures by several percentage points. `notat` does not use the flag, and
+`tools/jamfor.py` does the same so the numbers can be compared.
 
-## Röster: Deltagare 1, 2 …
+## Speakers: Deltagare 1, 2 …
 
-Växlas i bar-menyn (**Röster → Särskilj röster**) eller med `notat röster på|av`. Din egen
-mikrofon blir alltid **Du**; rösterna i mötets ljud får **Deltagare 1, 2 …** sorterade efter hur
-mycket de pratar (den som pratar mest blir 1). Ett stycke som inte täcks av någon uppmätt tur
-behåller "Mötet" — hellre ärligt tomt än gissat.
+Toggled in the bar menu (**Röster → Särskilj röster**) or with `notat röster på|av`. Your own
+microphone is always **Du**; the voices in the meeting audio get **Deltagare 1, 2 …** sorted by
+how much they talk (the one who talks most becomes 1). A paragraph that no measured turn covers
+keeps "Mötet" — honestly empty rather than guessed.
 
-Mekaniken är **sherpa-onnx** (statisk binär + ONNX-modeller, ~70 MB, ingen torch, ingen
-molntjänst): pyannote-segmentering + röst-embedding (NeMo TitaNet small). Talaren sätts på varje
-whisper-segment *innan* styckena slås ihop — annars kan ett stycke spänna flera röster och
-etiketten blir en gissning. `notat diar-hamta` hämtar modellerna (install.sh gör det åt dig).
+The mechanism is **sherpa-onnx** (a static binary plus ONNX models, ~70 MB, no torch, no cloud
+service): pyannote segmentation and voice embeddings (NeMo TitaNet small). The speaker is set on
+every whisper segment *before* the paragraphs are merged — otherwise a paragraph can span several
+voices and the label becomes a guess. `notat diar-hamta` fetches the models (install.sh does it
+for you).
 
-- Vet du hur många som deltar: sätt `"antal_talare": 3` i config — det är mer träffsäkert än
-  automatiken. Annars hittas antalet med tröskeln 0,8 (`NOTAT_DIAR_TRÖSKEL`); ett svep 0,6–0,95
-  mot ett tvåtalarsprov med 16 kända turer gav 100 % rätt turer för 0,7–0,95 och 88 % för 0,6 —
-  plattån är bred, och för låg tröskel spricker rösterna upp i stället för att slås ihop.
-- **Mätt:** på ett eget prov med två svenska röster och 16 kända turbyten gav automatiken
-  **16/16 rätt talare i turordning**. På en riktig 58 s-inspelning från ett rum hittade den fyra
-  röster i en diskussion som låter som två–tre: auto-läget är trubbigare på rummel.
-- **Kostnad:** cirka 0,2 × inspelningens längd i CPU-tid (en timme ≈ 12 minuter extra) — därför
-  är växeln av/på och står i menyn.
+- If you know how many people are in the meeting, set `"antal_talare": 3` in the config — it is
+  more accurate than the automation. Otherwise the count is found with the threshold 0.8
+  (`NOTAT_DIAR_TRÖSKEL`); a sweep from 0.6 to 0.95 against a two-speaker sample with 16 known
+  turns gave 100 % correct turns for 0.7–0.95 and 88 % for 0.6 — the plateau is wide, and too low
+  a threshold splits the voices instead of merging them.
+- **Measured:** on a sample of its own with two Swedish voices and 16 known turn changes, the
+  automation gave **16/16 correct speakers in turn order**. On a real 58 s recording from a room
+  it found four voices in a discussion that sounds like two or three: the auto mode is blunter on
+  room noise.
+- **Cost:** about 0.2 × the recording's length in CPU time (an hour ≈ 12 extra minutes) — which is
+  why the switch is on/off and sits in the menu.
 
-## Mötets titel och deltagare
+## Meeting title and participants
 
-Mötesapparna på Linux lämnar inget pålitligt lokalt: Zooms databaser är krypterade
-(`~/.zoom/data` har bara `experiment`-tabeller i klartext), Discord har ingen
-deltagarlista i något läsbart format, och tillgänglighetsbussen (AT-SPI) är avstängd
-som standard. `notat` gissar därför inte — du skriver namnen:
-
-```bash
-notat möte "Systemarkitektur 3"            # titeln blir dokumentets rubrik
-notat möte --deltagare "Ada, Bo"           # **Deltagare:** i dokumentet
-notat möte --namn "1=Ada, 2=Bo"            # Deltagare 1/2 i utskriften blir namnen
-notat möte --rensa                         # ta bort titel, deltagare och namn
-notat möte --mapp <inspelningsmapp>        # peka ut en äldre inspelning
-```
-
-Utan argument visar kommandot vilket möte det gäller. Utan pågående inspelning är det
-**senaste** mappen i `~/.local/share/notat/raw/`, och svaret säger vilken. Filerna
-skrivs i inspelningens `session.json` — samma fil transkriberingen läser — så titeln och
-deltagarlistan hamnar i dokumentet utan nya steg. `--namn` gäller den transkribering som
-kommer: sätt det medan du spelar in, eller kör `notat transcribe <mapp>` igen efteråt.
-Ett namn byter bara etiketten — spårnumret bakom (`who#nr`) bär dubblett- och ekologiken,
-och `Du`/`Mötet` döps aldrig om.
-
-## Kända röster: namnet följer rösten
-
-`Deltagare 1` gäller en inspelning. Vill man att namnet ska följa rösten mellan möten
-namnger man talaren **en gång** — det gör man redan med `notat möte --namn "1=Ada"` —
-och då sparas rösten:
+The meeting apps on Linux leave nothing reliable locally: Zoom's databases are encrypted
+(`~/.zoom/data` has only `experiment` tables in clear text), Discord has no participant list in
+any readable format, and the accessibility bus (AT-SPI) is disabled by default. `notat` therefore
+does not guess — you write the names:
 
 ```bash
-notat möte --namn "1=Ada" --mapp <inspelningsmapp>   # namnger + sparar rösten
-notat transcribe <mapp>                              # dokumentet skrivs med namnet
-notat namn                                           # visa registret
-notat namn på|av                                     # slå namnbytet på/av
-notat namn Ada ~/röstprov/ada.wav                    # spara en röst från en fil (16 kHz mono)
-notat glöm Ada                                       # radera röstprofilen
+notat möte "Systemarkitektur 3"            # the title becomes the document heading
+notat möte --deltagare "Ada, Bo"           # **Deltagare:** in the document
+notat möte --namn "1=Ada, 2=Bo"            # Deltagare 1/2 in the transcript become the names
+notat möte --rensa                         # clear title, participants and names
+notat möte --mapp <recording-dir>          # point at an older recording
 ```
 
-Nästa inspelning där Ada pratar får namnet av sig själv — i dokumentet märkt
-`Ada (röst)` för att det är en matchning och inte ett namn du skrivit. Hittas ingen känd
-röst står `Deltagare N` kvar: ingen gissning. `notat devices` visar registret och `på`.
+With no arguments the command shows which meeting it refers to. Without a running recording that
+is the **latest** directory in `~/.local/share/notat/raw/`, and the answer says which one. The
+values are written into the recording's `session.json` — the same file the transcription reads —
+so the title and the participant list land in the document without extra steps. `--namn` applies
+to the transcription that is coming: set it while you are recording, or run
+`notat transcribe <dir>` again afterwards. A name only changes the label — the track number
+behind it (`who#nr`) carries the duplicate and echo logic, and `Du`/`Mötet` are never renamed.
 
-**Mekaniken** är sherpa-binären som redan ligger i `~/.local/share/notat/diar/` — ingen ny
-modell, inget nytt att installera, inget skickas någonstans. Referensrösten och en okänd
-tur läggs i samma fil med en sekunds tystnad emellan; kör diariseringen och se om turen
-hamnar i samma kluster som referensen. Kostnad: ~1,4 s per okänd röst i en inspelning.
+## Known voices: the name follows the voice
 
-**Mätt på `diarprov/`** (16 turer, två syntetiska röster):
+`Deltagare 1` applies to one recording. If you want the name to follow the voice between
+meetings, name the speaker **once** — which you already do with `notat möte --namn "1=Ada"` — and
+the voice is saved:
 
-| Prov | Resultat |
+```bash
+notat möte --namn "1=Ada" --mapp <recording-dir>   # names + saves the voice
+notat transcribe <recording-dir>                   # the document is written with the name
+notat namn                                         # show the registry
+notat namn på|av                                   # toggle name matching
+notat namn Ada ~/voice-samples/ada.wav             # save a voice from a file (16 kHz mono)
+notat glöm Ada                                     # delete the voice profile
+```
+
+The next recording where Ada talks gets the name by itself — marked `Ada (röst)` in the document,
+because it is a match and not a name you typed. If no known voice is found, `Deltagare N` stays:
+no guessing. `notat devices` shows the registry and whether matching is `på`.
+
+**The mechanism** is the sherpa binary that is already in `~/.local/share/notat/diar/` — no new
+model, nothing new to install, nothing sent anywhere. The reference voice and an unknown turn are
+put in the same file with one second of silence between them; run the diarisation and see whether
+the turn lands in the same cluster as the reference. Cost: ~1.4 s per unknown voice in a
+recording.
+
+**Measured on `diarprov/`** (16 turns, two synthetic voices):
+
+| Sample | Result |
 |---|---|
-| Samma röst mot olika, isolerat (`tur00`+`tur02` / `tur00`+`tur01`) | 1 kluster / 2 kluster — 4/4 rätt |
-| Okänd tur mot två referenser, 14 turer, tröskelsvep | **14/14 för 0,6–0,8**; 13/14 vid sherpas standard 0,5; 10/14 vid 0,9 |
+| Same voice against different, isolated (`tur00`+`tur02` / `tur00`+`tur01`) | 1 cluster / 2 clusters — 4/4 correct |
+| Unknown turn against two references, 14 turns, threshold sweep | **14/14 for 0.6–0.8**; 13/14 at sherpa's default 0.5; 10/14 at 0.9 |
 
-Tröskeln är ratten, och plattån är bred: under 0,5 spricker talaren i flera kluster, över
-0,9 slås **referensrösterna** ihop (mätt: 14/14 vid 1,0) och då blir alla samma person.
-`NOTAT_RÖST_TRÖSKEL` (standard 0,7) ligger mitt i plattån. Mätt med en egen
-embedding-kedja (`onnxruntime` + `numpy`, samma TitaNet-modell): samma röst +0,87 i cosinus
-mot olika +0,33 — men det kräver ett paket som inte finns i repot, så vägen ovan valdes.
+The threshold is the dial, and the plateau is wide: below 0.5 the speaker splits into several
+clusters, above 0.9 the **reference voices** merge (measured: 14/14 at 1.0) and then everyone
+becomes the same person. `NOTAT_RÖST_TRÖSKEL` (default 0.7) sits in the middle of the plateau.
+Measured with a separate embedding chain (`onnxruntime` + `numpy`, the same TitaNet model): the
+same voice +0.87 in cosine against different +0.33 — but that needs a package that is not in the
+repository, so the path above was chosen.
 
-**Gränsen, ärligt:** två syntetiska röster i en ren inspelning. Fler röster, sämre
-mikrofoner, överhörning och en röst som ändras över tid är inte mätt — därför är namnet
-märkt `(röst)` i dokumentet, matchningen kan stängas av, och röstprofilerna ligger i
-`~/.local/share/notat/röster/` med 0600 (katalogen 0700) och raderas med `notat glöm`.
+**The limit, honestly:** two synthetic voices in a clean recording. More voices, worse
+microphones, bleed and a voice that changes over time are not measured — that is why the name is
+marked `(röst)` in the document, why matching can be switched off, and why the voice profiles sit
+in `~/.local/share/notat/röster/` with mode 0600 (directory 0700) and are deleted with
+`notat glöm`.
 
-## Var sakerna hamnar
+## Where things end up
 
-- **Dokument:** `<valv>/Inspelningar/Möte ÅÅÅÅ-MM-DD TT-MM.md` (titeln du satte med
-  `notat möte` blir filnamn i stället). Valvet är `valv` i
-  `~/.config/notat/config.json`, annars `vault_root` ur `~/.config/omascribe/config.json`,
-  annars `~/Documents/OmaScribe Vault`, annars `~/Documents/Anteckningar`.
-  Formen: `## Sammanfattning` (punkter + Beslut/Uppgifter/Nyckelbegrepp), `## Transkription`
-  med talare (`Mötet` = ljudutgången, `Du` = mikrofonen, `Deltagare 1, 2 …` när röstväxeln är
-  på) i tidsordning, och `## Egna anteckningar`.
-  Utskriften skrivs först, sammanfattningen läggs ovanpå — är AI-tjänsten nere förlorar du
-  aldrig utskriften, bara sammanfattningen (du får en notis).
-- **Rå ljud:** `~/.local/share/notat/raw/<tidsstämpel>/*.wav` (16 kHz mono). Behålls med flit —
-  `notat transcribe <mapp>` kan göra om dem.
-- **Modeller:** `~/.local/share/notat/models/<id>/`.
-- **Talarskiljning:** `~/.local/share/notat/diar/` (sherpa-onnx-binären och ONNX-modellerna,
-  ~70 MB; `notat diar-hamta` hämtar dem).
-- **Logg:** `~/.local/share/notat/notat.log` (vem anropade vad).
+- **Documents:** `<vault>/Inspelningar/Möte YYYY-MM-DD HH-MM.md` (a title set with `notat möte`
+  becomes the file name instead). The vault is `valv` in `~/.config/notat/config.json`, otherwise
+  `vault_root` from `~/.config/omascribe/config.json`, otherwise `~/Documents/OmaScribe Vault`,
+  otherwise `~/Documents/Anteckningar`.
+  Shape: `## Sammanfattning` (bullets plus Beslut/Uppgifter/Nyckelbegrepp), `## Transkription`
+  with speakers (`Mötet` = the audio output, `Du` = the microphone, `Deltagare 1, 2 …` when the
+  voice switch is on) in time order, and `## Egna anteckningar`.
+  The transcript is written first and the summary is added on top — if the AI service is down you
+  never lose the transcript, only the summary (you get a notification).
+- **Raw audio:** `~/.local/share/notat/raw/<timestamp>/*.wav` (16 kHz mono). Kept on purpose —
+  `notat transcribe <dir>` can redo them.
+- **Models:** `~/.local/share/notat/models/<id>/`.
+- **Speaker separation:** `~/.local/share/notat/diar/` (the sherpa-onnx binary and the ONNX
+  models, ~70 MB; `notat diar-hamta` fetches them).
+- **Log:** `~/.local/share/notat/notat.log` (who called what).
 
-## Inställningar — `~/.config/notat/config.json`
+## Settings — `~/.config/notat/config.json`
 
 ```json
 {
@@ -246,36 +259,37 @@ märkt `(röst)` i dokumentet, matchningen kan stängas av, och röstprofilerna 
 }
 ```
 
-- `uteslut`: enheter som inte ska spelas in (namn eller beskrivning som *innehåller* mönstret,
-  skiftlägesoberoende). `notat devices` listar dem under `uteslutna`, så det syns vad som valts
-  bort i stället för att försvinna tyst. Menyn skriver hit.
-- `modell`: vald modell (sätts av menyn).
-- `röster`: skilj talarna åt i dokumentet (menyn växlar).
-- `antal_talare`: 0 = hitta antalet automatiskt; sätt antalet om du vet det.
-- `valv`: var dokumenten hamnar.
+- `uteslut`: devices that must not be recorded (name or description *containing* the pattern,
+  case-insensitive). `notat devices` lists them under `uteslutna`, so what was left out is
+  visible instead of disappearing silently. The menu writes here.
+- `modell`: the selected model (set by the menu).
+- `röster`: separate the speakers in the document (the menu toggles it).
+- `antal_talare`: 0 = find the count automatically; set the number if you know it.
+- `valv`: where the documents go.
 
-Miljövariabler: `NOTAT_MODEL` (sökväg eller id), `NOTAT_MODEL_DIR`, `NOTAT_LANG` (default
-`auto`), `NOTAT_SINK`, `NOTAT_SOURCE`, `NOTAT_VAULT` (överstyr `valv`, bra för provkörningar),
-`NOTAT_DIAR_TRÖSKEL` (klustringströskel, default 0,8).
+Environment variables: `NOTAT_MODEL` (path or id), `NOTAT_MODEL_DIR`, `NOTAT_LANG` (default
+`auto`), `NOTAT_SINK`, `NOTAT_SOURCE`, `NOTAT_VAULT` (overrides `valv`, handy for test runs),
+`NOTAT_DIAR_TRÖSKEL` (clustering threshold, default 0.8).
 
-## VAD är inte valfritt
+## VAD is not optional
 
-Utan VAD-modellen hittar whisper på text i tystnaden. Mätt: 5 minuter digital tystnad gav
-10 påhittade segment utan VAD ("you you You …") och 0 med Silero-VAD — dessutom snabbare.
-`install.sh` hämtar `ggml-silero-v5.1.2.bin` (885 kB).
+Without the VAD model, whisper finds text in the silence. Measured: 5 minutes of digital silence
+gave 10 invented segments without VAD ("you you You …") and 0 with Silero-VAD — and it is faster,
+too. `install.sh` fetches `ggml-silero-v5.1.2.bin` (885 kB).
 
 ## Test
 
 ```bash
-python3 test_notat.py              # ren logik: segment, stycken, ljuddubbletter, enheter, modellval, talaretiketter, titel/deltagare, röster, sök (28/28)
-NOTAT_NATVERK=1 python3 test_notat.py   # + att varje nedladdnings-URL ger en riktig fil
-bash tools/e2e.sh                  # ände-till-ände via virtuell sink (inget ljud i rummet)
-python3 tools/jamfor.py tools/facit.wav tools/facit.txt kb-whisper-small   # WER mot känd text
-python3 tools/diarprov.py          # talaruppdelning mot ett syntetiskt tvåtalarsprov (16 turer)
-python3 tools/spar.py              # per spår: nivå och vad whisper hörde (felsökning)
+python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search (28/28)
+NOTAT_NATVERK=1 python3 test_notat.py   # + that every download URL returns a real file
+bash tools/e2e.sh                  # end to end through a virtual sink (no audio in the room)
+python3 tools/jamfor.py tools/facit.wav tools/facit.txt kb-whisper-small   # WER against known text
+python3 tools/diarprov.py          # speaker separation against a synthetic two-speaker sample (16 turns)
+python3 tools/spar.py              # per track: level and what whisper heard (troubleshooting)
 ```
 
-`tools/facit.wav` ingår inte (ljudfil) — gör den själv av facit-texten med valfri svensk röst:
+`tools/facit.wav` is not included (it is an audio file) — build it yourself from the reference
+text with any Swedish voice:
 
 ```bash
 pip install edge-tts
@@ -283,33 +297,33 @@ edge-tts --voice sv-SE-SofieNeural --file tools/facit.txt --write-media /tmp/f.m
 ffmpeg -i /tmp/f.mp3 -ac 1 -ar 16000 tools/facit.wav
 ```
 
-## Felsökning
+## Troubleshooting
 
-| Symptom | Orsak / åtgärd |
+| Symptom | Cause / what to do |
 |---|---|
-| Dokumentet har varning om att mötets ljud hördes i rummet | du spelar i högtalare — använd hörlurar |
-| Texten står två gånger | samma som ovan; flera mikrofoner tar upp samma röst |
-| Påhittad text i pauserna | VAD-modellen saknas i `~/.local/share/notat/models/` |
-| "hittar ingen whisper-modell" | välj/ladda ner en i bar-menyn, eller `notat hamta kb-whisper-small` |
-| Ingen text alls, inspelningen är tyst | fel enhet vald i menyn — `python3 tools/spar.py <mapp>` visar dB per spår |
-| Bar-knappen syns inte | `omarchy plugin enable io.github.alexwest1981.omanotation`, sedan `omarchy-restart-shell` |
-| Inget dokument efter stoppet | `notat status --json` säger om jobbet lever; barnets utskrift ligger i `~/.local/share/notat/raw/<mapp>/transcription.log`. Kör om med `notat transcribe "<mapp>"` |
+| The document warns that the meeting audio was heard in the room | you are playing through loudspeakers — use headphones |
+| The text appears twice | same as above; several microphones pick up the same voice |
+| Invented text in the pauses | the VAD model is missing from `~/.local/share/notat/models/` |
+| "hittar ingen whisper-modell" | pick/download one in the bar menu, or `notat hamta kb-whisper-small` |
+| No text at all, the recording is silent | wrong device selected in the menu — `python3 tools/spar.py <dir>` shows dB per track |
+| The bar button is not visible | `omarchy plugin enable io.github.alexwest1981.omanotation`, then `omarchy-restart-shell` |
+| No document after the stop | `notat status --json` says whether the job is alive; the child's output is in `~/.local/share/notat/raw/<dir>/transcription.log`. Rerun with `notat transcribe "<dir>"` |
 
-## Avinstallation
+## Uninstall
 
 ```bash
-omarchy plugin remove io.github.alexwest1981.omanotation   # bar-knappen
-rm ~/.local/bin/notat                                      # kommandot
-rm -rf ~/.config/notat ~/.local/share/notat                # config, modeller, röstprofiler, rå ljud
+omarchy plugin remove io.github.alexwest1981.omanotation   # the bar button
+rm ~/.local/bin/notat                                      # the command
+rm -rf ~/.config/notat ~/.local/share/notat                # config, models, voice profiles, raw audio
 ```
 
-Dokumenten ligger kvar i valvet (radera dem där du vill) — `notat senaste` visar sökvägen.
-Raden med `~/.local/share/notat` tar också bort de råa inspelningarna (`raw/`), de hämtade
-modellerna och röstprofilerna; inget av det ligger utanför de två mapparna.
+The documents stay in the vault (delete them there when you like) — `notat senaste` shows the
+path. The `~/.local/share/notat` line also removes the raw recordings (`raw/`), the downloaded
+models and the voice profiles; none of it lives outside those two directories.
 
-## Licens
+## License
 
-MIT (se LICENSE). Modellvikterna har egna licenser: KB-Whisper är Apache-2.0 (KBLab,
-Kungliga biblioteket), OpenAI:s Whisper-vikter är MIT. Silero-VAD är MIT. Talarskiljningen
-använder sherpa-onnx (Apache-2.0), pyannote-segmentation-3.0 (MIT) och NVIDIA NeMo TitaNet
-(licensvillkoren står på NGC-modellsidan).
+MIT (see LICENSE). The model weights carry their own licences: KB-Whisper is Apache-2.0 (KBLab,
+the National Library of Sweden), OpenAI's Whisper weights are MIT. Silero-VAD is MIT. The speaker
+separation uses sherpa-onnx (Apache-2.0), pyannote-segmentation-3.0 (MIT) and NVIDIA NeMo TitaNet
+(the terms are on the NGC model page).
