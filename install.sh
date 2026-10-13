@@ -2,11 +2,15 @@
 # Installs notat: the command, the VAD model, a whisper model and the bar button in Omarchy.
 #   ./install.sh            (downloads kb-whisper-small, 466 MB)
 #   ./install.sh --no-model
+# Every download here and in notat is checked against a pinned sha256 before it is used; the
+# download is discarded when it does not match.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 MODEL_ROOT="$HOME/.local/share/notat/models"
 VAD="$MODEL_ROOT/ggml-silero-v5.1.2.bin"
+VAD_URL="https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+VAD_SHA256="29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"   # published by the source
 
 require() {
   command -v "$1" >/dev/null || { echo "missing: $1  ->  $2"; exit 1; }
@@ -31,7 +35,12 @@ fi
 # 3. the VAD model - without it whisper finds text in the silence
 if [ ! -f "$VAD" ]; then
   echo "fetching the VAD model ..."
-  curl -sL -o "$VAD" "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+  curl -sL -o "$VAD" "$VAD_URL"
+  if ! echo "$VAD_SHA256  $VAD" | sha256sum -c - >/dev/null 2>&1; then
+    rm -f "$VAD"
+    echo "the VAD model does not match the pinned checksum - it was not installed" >&2
+    exit 1
+  fi
 fi
 
 # 4. a whisper model

@@ -3,10 +3,13 @@
 
   python3 test_notat.py     (0 = everything ok)
 """
+import base64
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -343,7 +346,8 @@ def test_voice_switch_and_refusal():
     old_cfg, old_files = notat.CONFIG, notat.DIAR_FILES
     notat.CONFIG = cfgp
     try:
-        notat.DIAR_FILES = [{"ready": os.path.join(tmp, "missing"), "name": "x", "mb": 1}]
+        notat.DIAR_FILES = [{"ready": os.path.join(tmp, "missing"), "name": "x", "mb": 1,
+                             "dest": os.path.join(tmp, "x"), "parts": []}]
         assert notat.diar_available() is False
         assert notat.cmd_speakers({"_": ["on"]}) == 1
         assert notat.notat_config().get("speakers") in (None, False), "turned on without models"
@@ -351,7 +355,8 @@ def test_voice_switch_and_refusal():
         assert notat.cmd_speakers({"_": ["maybe"]}) == 1, "an unknown mode must be refused"
 
         ready = os.path.join(tmp, "model"); open(ready, "w").close()
-        notat.DIAR_FILES = [{"ready": ready, "name": "x", "mb": 1}]
+        notat.DIAR_FILES = [{"ready": ready, "name": "x", "mb": 1,
+                             "dest": os.path.join(tmp, "x"), "parts": []}]
         assert notat.diar_available() is True
         assert notat.cmd_speakers({"_": ["on"]}) == 0
         assert notat.notat_config()["speakers"] is True
@@ -578,6 +583,118 @@ def test_legacy_config_keys_carry_over_once():
     finally:
         notat.CONFIG = old
         shutil.rmtree(d)
+
+
+def test_every_download_carries_a_pinned_digest():
+    """A download sink without a pinned sha256 is the finding the marketplace reported."""
+    hex64 = re.compile(r"[0-9a-f]{64}")
+    for m in notat.MODELS:
+        assert hex64.fullmatch(m.get("sha256", "")), f"{m['id']} has no pinned digest"
+    for f in notat.DIAR_FILES:
+        assert hex64.fullmatch(f.get("sha256", "")), f"{f['name']} has no pinned digest"
+        assert f["parts"], f"{f['name']} pins only the archive, not what is loaded"
+        for path, digest in f["parts"]:
+            assert hex64.fullmatch(digest), (f["name"], path)
+        if f["tar"]:      # the archive's digest is not the digest of the files that run
+            assert all(digest != f["sha256"] for _, digest in f["parts"]), f["name"]
+
+    with open(os.path.join(HERE, "install.sh"), encoding="utf-8") as fh:
+        installer = fh.read()
+    assert hex64.fullmatch(re.search(r'VAD_SHA256="([^"]+)"', installer).group(1)), "install.sh"
+    assert "sha256sum -c" in installer, "install.sh downloads the VAD model without checking it"
+
+
+def test_a_download_that_does_not_match_is_rejected():
+    """download_file checks the pinned digest and leaves nothing behind when it fails."""
+    import shutil
+    payload = b"notat" * 1000
+    url = "data:application/octet-stream;base64," + base64.b64encode(payload).decode()
+    digest = hashlib.sha256(payload).hexdigest()
+    tmp = tempfile.mkdtemp()
+    try:
+        good = os.path.join(tmp, "artifact.bin")
+        notat.download_file(url, good, min_mb=0, sha256=digest, what="artifact")
+        assert os.path.getsize(good) == len(payload)
+        bad = os.path.join(tmp, "artifact2.bin")
+        try:
+            notat.download_file(url, bad, min_mb=0, sha256="0" * 64, what="artifact")
+            raise AssertionError("a download that does not match the pinned digest was accepted")
+        except ValueError as e:
+            assert "checksum" in str(e), e
+        assert not os.path.exists(bad), "the rejected download was left on disk"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_tampered_diar_file_is_refused_before_it_runs():
+    """The downloaded binary is checked against its pinned digest immediately before it runs."""
+    import shutil
+    tmp = tempfile.mkdtemp()
+    sentinel = os.path.join(tmp, "ran")
+    binp = os.path.join(tmp, "sherpa-onnx-offline-speaker-diarization")
+    with open(binp, "w", encoding="utf-8") as f:
+        f.write(f"#!/bin/sh\ntouch {sentinel}\n")
+    os.chmod(binp, 0o755)
+    digest = notat.sha256_file(binp)
+    row = {"name": "sherpa-onnx", "tar": True, "ready": binp, "dest": tmp,
+           "sha256": "a" * 64, "parts": [(binp, digest)]}
+    old_files, old_log = notat.DIAR_FILES, notat.LOG
+    notat.DIAR_FILES = [row]
+    notat.LOG = os.path.join(tmp, "notat.log")
+    try:
+        assert notat.diar_intact(row) is True and notat.diar_verify() is None
+        with open(binp, "a", encoding="utf-8") as f:
+            f.write("# replaced after the download\n")
+        assert notat.diar_intact(row) is False
+        err = notat.diar_verify()
+        assert err and "checksum" in err, err
+        turns, err2 = notat.diar_turns(os.path.join(tmp, "audio.wav"))
+        assert turns is None and err2 and "checksum" in err2, (turns, err2)
+        assert not os.path.exists(sentinel), "the replaced binary was executed"
+    finally:
+        notat.DIAR_FILES, notat.LOG = old_files, old_log
+        shutil.rmtree(tmp)
+
+
+def test_pinned_digests_are_the_published_ones():
+    """Network test (NOTAT_NETWORK=1): every pin is the digest the source itself publishes."""
+    if os.environ.get("NOTAT_NETWORK") != "1":
+        return
+    import urllib.request
+
+    def get_json(url):
+        req = urllib.request.Request(url, headers={"User-Agent": "notat/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.load(r)
+
+    def hf_published(url):
+        """Hugging Face publishes each file's sha256 as the LFS oid."""
+        repo, _, path = url.split("huggingface.co/")[1].partition("/resolve/main/")
+        for e in get_json(f"https://huggingface.co/api/models/{repo}/tree/main?recursive=1"):
+            if e.get("path") == path:
+                return (e.get("lfs") or {}).get("oid")
+        return None
+
+    for m in notat.MODELS:
+        assert hf_published(m["url"]) == m["sha256"], f"{m['id']}: the pin is not the published digest"
+    for f in notat.DIAR_FILES:
+        if "huggingface.co" in f["url"]:
+            assert hf_published(f["url"]) == f["sha256"], f["name"]
+
+    with open(os.path.join(HERE, "install.sh"), encoding="utf-8") as fh:
+        installer = fh.read()
+    assert hf_published(re.search(r'VAD_URL="([^"]+)"', installer).group(1)) == \
+        re.search(r'VAD_SHA256="([^"]+)"', installer).group(1), "install.sh's VAD pin"
+
+    # The sherpa-onnx release asset: GitHub reports the digest its uploader sent (sha256:<hex>).
+    # https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
+    parts = notat.DIAR_FILES[0]["url"].split("github.com/")[1].split("/", 5)
+    owner, repo, tag, asset = parts[0], parts[1], parts[4], parts[5]
+    published = None
+    for a in get_json(f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{tag}")["assets"]:
+        if a["name"] == asset:
+            published = (a.get("digest") or "").removeprefix("sha256:")
+    assert published == notat.DIAR_FILES[0]["sha256"], f"{asset}: the pin is not the published digest"
 
 
 if __name__ == "__main__":

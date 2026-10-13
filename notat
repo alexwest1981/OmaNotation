@@ -21,6 +21,7 @@
   notat devices    show which devices are used (and which have been opted out)
 """
 import bisect
+import hashlib
 import json
 import os
 import re
@@ -50,25 +51,33 @@ FOLDERS = ["small", "base", "tiny"]          # fallback if nothing was chosen in
 
 # The model catalogue: what the bar offers. 'file' is looked up in MODEL_ROOT/<id>/ for
 # downloaded models, otherwise in MODEL_DIRS (whisper.cpp's own names) for the ones already there.
+# Every row carries the sha256 the source publishes for the file (Hugging Face reports it as the
+# file's LFS oid) - download_file checks it before the file is moved into place.
 MODELS = [
     {"id": "kb-whisper-large", "name": "KB-Whisper large (Swedish)", "file": "ggml-model.bin",
      "mb": 3100, "description": "Best for Swedish. Slowest.",
-     "url": "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model.bin"},
+     "url": "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model.bin",
+     "sha256": "b66f2dda369a88f6c03fe37326d7cc37aa216f6f34e6fc1be686e497ba9c2f39"},
     {"id": "kb-whisper-large-q5", "name": "KB-Whisper large q5 (Swedish)", "file": "ggml-model-q5_0.bin",
      "mb": 1100, "description": "Almost as good, a third of the size.",
-     "url": "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model-q5_0.bin"},
+     "url": "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model-q5_0.bin",
+     "sha256": "6d2863812d7410322bb7d8647a5c7260761300fa946714c9ed66d22bb30bcb19"},
     {"id": "kb-whisper-medium", "name": "KB-Whisper medium (Swedish)", "file": "ggml-model.bin",
      "mb": 1500, "description": "Mid-range for Swedish.",
-     "url": "https://huggingface.co/KBLab/kb-whisper-medium/resolve/main/ggml-model.bin"},
+     "url": "https://huggingface.co/KBLab/kb-whisper-medium/resolve/main/ggml-model.bin",
+     "sha256": "1b7842bc1c3f79fb3bf043a0a3590961d625a49ef3ccbdceb00e738c5dd8b015"},
     {"id": "kb-whisper-small", "name": "KB-Whisper small (Swedish)", "file": "ggml-model.bin",
      "mb": 466, "description": "Fast, yet better than OpenAI small for Swedish.",
-     "url": "https://huggingface.co/KBLab/kb-whisper-small/resolve/main/ggml-model.bin"},
+     "url": "https://huggingface.co/KBLab/kb-whisper-small/resolve/main/ggml-model.bin",
+     "sha256": "de6911330cbdc131362f7a955682b65c8a5a2394caba73e7ea821a9822efb8c6"},
     {"id": "openai-small", "name": "OpenAI small (multilingual)", "file": "ggml-small.bin",
      "mb": 466, "description": "The standard model that is in the system.",
-     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"},
+     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+     "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"},
     {"id": "openai-large-v3-turbo", "name": "OpenAI large-v3-turbo (multilingual)", "file": "ggml-large-v3-turbo.bin",
      "mb": 1600, "description": "Fast large model for English meetings.",
-     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"},
+     "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+     "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"},
 ]
 VAD_NAMES = ["ggml-silero-v5.1.2.bin", "ggml-silero-v5.0.0.bin"]
 
@@ -85,16 +94,31 @@ DIAR_EMB = os.path.join(DIAR_ROOT, "emb/nemo_en_titanet_small.onnx")
 # shell profile or unit file that sets it keeps working. Same for VOICE_THRESHOLD further down.
 DIAR_THRESHOLD = float(os.environ.get("NOTAT_DIAR_THRESHOLD")
                        or os.environ.get("NOTAT_DIAR_TRÖSKEL") or "0.8")
+# Each row pins two things: "sha256" is the digest of the file that is downloaded, and "parts"
+# are the digests of the files that end up on disk and are then run or loaded. The archive digest
+# alone would not be enough - the binary is what gets executed, so it is pinned itself.
 DIAR_FILES = [
     {"name": "sherpa-onnx", "mb": 23, "tar": True, "dest": os.path.join(DIAR_ROOT, "sherpa"),
      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/"
-            "sherpa-onnx-v1.13.8-linux-x64-shared-no-tts.tar.bz2"},
+            "sherpa-onnx-v1.13.8-linux-x64-shared-no-tts.tar.bz2",
+     "sha256": "d0f96c8b65c6cd0974fada22737e337de81bc8cd2abbec2e39caf358b1eec5fc",
+     "parts": [(DIAR_BIN, "d9aec1fc39b7a36a7e0d893acc6e83299d70b3cbe4f6bff5bf494c81dab979c4"),
+               (os.path.join(DIAR_ROOT, "sherpa/lib/libsherpa-onnx-c-api.so"),
+                "c067b18cd746e49eb5016ee428196d21e1df14c14a3c54f128c1ac95f6aaed50"),
+               (os.path.join(DIAR_ROOT, "sherpa/lib/libsherpa-onnx-cxx-api.so"),
+                "81b3c4ffdd19e3da9d4f7df7c41fde233506cb701a074b005c31234bf910b1e1"),
+               (os.path.join(DIAR_ROOT, "sherpa/lib/libonnxruntime.so"),
+                "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e")]},
     {"name": "speaker segmentation (pyannote)", "mb": 6, "tar": True, "dest": os.path.join(DIAR_ROOT, "seg"),
      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/"
-            "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"},
+            "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+     "sha256": "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
+     "parts": [(DIAR_SEG, "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079")]},
     {"name": "voice embedding (NeMo TitaNet small)", "mb": 40, "tar": False, "dest": DIAR_EMB,
      "url": "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/main/"
-            "nemo_en_titanet_small.onnx"},
+            "nemo_en_titanet_small.onnx",
+     "sha256": "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e",
+     "parts": [(DIAR_EMB, "ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e")]},
 ]
 for _f in DIAR_FILES:               # what must exist for the diarisation to work
     _f["ready"] = DIAR_BIN if _f["dest"].endswith("sherpa") else (
@@ -119,6 +143,22 @@ VAULT_FOLDER_OLD = "Inspelningar"   # what it was called before the English name
 
 def sh(*args, **kw):
     return subprocess.run(args, capture_output=True, text=True, **kw)
+
+
+def sha256_file(path):
+    """The file's sha256 - what the pinned digests in this file are compared against."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def verify_sha256(path, expected, what):
+    """A downloaded artifact must match its pinned digest. Raises ValueError when it does not."""
+    got = sha256_file(path)
+    if got != expected:
+        raise ValueError(f"{what}: checksum mismatch - expected {expected}, got {got}")
 
 
 def model_path(mid):
@@ -164,8 +204,11 @@ def find_model():
     sys.exit("notat: no whisper model found (set NOTAT_MODEL or download one in the bar)")
 
 
-def download_file(url, tmp, min_mb=1):
-    """Streams a file to tmp and writes {"percent": N} per line (the bar's meter reads them)."""
+def download_file(url, tmp, min_mb=1, sha256=None, what=""):
+    """Streams a file to tmp and writes {"percent": N} per line (the bar's meter reads them).
+
+    sha256 is the digest pinned next to the URL. A file that does not match it is deleted and
+    reported as an error, so a replaced download never reaches the disk as a usable artifact."""
     req = urllib.request.Request(url, headers={"User-Agent": "notat/1.0"})
     with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
@@ -182,6 +225,15 @@ def download_file(url, tmp, min_mb=1):
                 nxt = p + 5
     if os.path.getsize(tmp) < min_mb * 1_000_000:
         raise ValueError("the file is too small - the download went wrong")
+    if sha256:
+        try:
+            verify_sha256(tmp, sha256, what or os.path.basename(tmp))
+        except ValueError:
+            try:
+                os.unlink(tmp)          # do not leave a download that failed its check behind
+            except OSError:
+                pass
+            raise
 
 
 def speakers_enabled():
@@ -193,18 +245,55 @@ def diar_available():
     return all(os.path.exists(f["ready"]) for f in DIAR_FILES)
 
 
+def diar_verify():
+    """(error) - the files the diarisation runs and loads, checked against the pinned digests.
+
+    Called right before the downloaded binary is started and before its models are loaded: a file
+    that no longer matches its pinned digest is refused instead of executed."""
+    for f in DIAR_FILES:
+        for path, digest in f["parts"]:
+            if not os.path.exists(path):
+                return f"{f['name']}: {os.path.basename(path)} is missing - run: notat speakers fetch"
+            got = sha256_file(path)
+            if got != digest:
+                return (f"{f['name']}: {os.path.basename(path)} does not match the pinned checksum "
+                        f"(expected {digest}, got {got}) - run: notat speakers fetch")
+    return None
+
+
+def diar_intact(f):
+    """Is the row's file there and does it still match its pinned digest?"""
+    if not os.path.exists(f["ready"]):
+        return False
+    return all(os.path.exists(p) and sha256_file(p) == d for p, d in f["parts"])
+
+
+def diar_wipe(f):
+    """Removes a destination whose content failed its check, so it is fetched again."""
+    if os.path.isdir(f["dest"]):
+        shutil.rmtree(f["dest"], ignore_errors=True)
+    else:
+        try:
+            os.unlink(f["dest"])
+        except OSError:
+            pass
+
+
 def cmd_diar_download(_args):
     """Fetches sherpa-onnx + segmentation + embedding (~70 MB) for the speaker separation."""
     import tarfile
     os.makedirs(DIAR_ROOT, exist_ok=True)
     try:
         for f in DIAR_FILES:
-            if os.path.exists(f["ready"]):
+            if diar_intact(f):
                 print(json.dumps({"ok": True, "already": True, "what": f["name"]}, ensure_ascii=False))
                 continue
+            if os.path.exists(f["ready"]):
+                log(f"speakers fetch: {f['name']} does not match the pinned checksum - fetching again")
+                diar_wipe(f)
             if f["tar"]:
                 tmp = os.path.join(DIAR_ROOT, os.path.basename(f["url"]))
-                download_file(f["url"], tmp, min_mb=5)
+                download_file(f["url"], tmp, min_mb=5, sha256=f["sha256"], what=f["name"])
                 out = tmp + ".out"
                 os.makedirs(out, exist_ok=True)
                 with tarfile.open(tmp, "r:bz2") as t:
@@ -220,12 +309,18 @@ def cmd_diar_download(_args):
                     os.chmod(DIAR_BIN, 0o755)
             else:
                 os.makedirs(os.path.dirname(f["dest"]), exist_ok=True)
-                download_file(f["url"], f["dest"] + ".del", min_mb=5)
+                download_file(f["url"], f["dest"] + ".del", min_mb=5, sha256=f["sha256"],
+                              what=f["name"])
                 os.replace(f["dest"] + ".del", f["dest"])
             print(json.dumps({"ok": True, "what": f["name"], "done": diar_available()}, ensure_ascii=False))
     except Exception as e:
         log(f"speakers fetch failed: {e}")
         print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
+        return 1
+    err = diar_verify()          # the extracted files, not only the archives
+    if err:
+        log(f"speakers fetch: {err}")
+        print(json.dumps({"ok": False, "error": err}, ensure_ascii=False))
         return 1
     log("speakers fetch done")
     print(json.dumps({"ok": True, "path": DIAR_ROOT, "speakers": True}, ensure_ascii=False))
@@ -265,6 +360,10 @@ def diar_turns(wav, speaker_count=0, threshold=None):
     """Speaker turns from a wav: ([(start, end, 'speaker_00')], error)."""
     if not diar_available():
         return None, "the speaker separation is not downloaded (run: notat speakers fetch)"
+    err = diar_verify()
+    if err:
+        log(f"diarisation refused: {err}")
+        return None, err
     args = [DIAR_BIN, "--segmentation.pyannote-model=" + DIAR_SEG, "--embedding.model=" + DIAR_EMB]
     if speaker_count:
         args.append(f"--clustering.num-clusters={speaker_count}")
@@ -603,7 +702,7 @@ def cmd_download(args):
     os.makedirs(dest_dir, exist_ok=True)
     dest, tmp = os.path.join(dest_dir, m["file"]), os.path.join(dest_dir, m["file"] + ".del")
     try:
-        download_file(m["url"], tmp, min_mb=1)
+        download_file(m["url"], tmp, min_mb=1, sha256=m["sha256"], what=mid)
         os.replace(tmp, dest)
     except Exception as e:
         try:

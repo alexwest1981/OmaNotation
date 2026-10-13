@@ -34,6 +34,16 @@ cd OmaNotation
 ./install.sh --no-model            # if you already have a model
 ```
 
+Every file that `install.sh` and `notat` fetch — the VAD model, the whisper models, sherpa-onnx
+and its two ONNX models — carries a **sha256 pinned in the repository** and is checked against it
+right after the download; a download that does not match is deleted and reported as an error
+instead of being installed, and `notat speakers fetch` fetches such a file again rather than
+keeping it. The sherpa-onnx binary, its shared libraries and the ONNX models it loads are checked
+against the same digests immediately before they run, so a file that was replaced after the
+download is refused instead of executed (74 MB, ~0.8 s on the machine this was built on). The
+digests are the ones the sources themselves publish: Hugging Face reports the file's sha256 as the
+LFS oid, and GitHub reports the digest of the release asset for sherpa-onnx.
+
 The plugin lives in the repository root (`manifest.json` + `BarWidget.qml`), the layout the
 Omarchy plugin marketplace requires. `install.sh` does not copy into a plugin folder that Omarchy
 fetched itself (that folder is under git and is updated with
@@ -286,13 +296,16 @@ too. `install.sh` fetches `ggml-silero-v5.1.2.bin` (885 kB).
 ## Test
 
 ```bash
-python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search (29/29)
-NOTAT_NETWORK=1 python3 test_notat.py   # + that every download URL returns a real file
+python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search, the pinned download digests (33/33)
+NOTAT_NETWORK=1 python3 test_notat.py   # + that every download URL returns a real file and that every pin is the digest the source publishes
 bash tools/e2e.sh                  # end to end through a virtual sink (no audio in the room)
 python3 tools/compare.py tools/reference.wav tools/reference.txt kb-whisper-small   # WER against known text
 python3 tools/diar-sample.py       # speaker separation against a synthetic two-speaker sample (16 turns)
 python3 tools/probe.py             # per track: level and what whisper heard (troubleshooting)
 ```
+
+One test needs an HDMI output in `pactl` (`tools/fake-pactl` gives a CI runner one) — on a
+machine without one the suite reports 32/33 and names that test.
 
 `tools/reference.wav` is not included (it is an audio file) — build it yourself from the reference
 text with any Swedish voice:
