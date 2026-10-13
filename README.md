@@ -2,7 +2,10 @@
 
 ![OmaNotation](preview.jpg)
 
-Both images in this repository are illustrations of the use case, not screenshots of the widget.
+![The bar menu: the sources to record, the model and the voices](menu.png)
+
+The two photographs (`preview.jpg`, `meeting-notes.jpg`) are illustrations of the use case;
+`menu.png` is a screenshot of the widget's own right-click menu.
 
 Meeting and lecture note taker for Linux/Omarchy. It records **both audio sides** (the meeting
 from each output's monitor, you from the microphones), transcribes with whisper.cpp and writes a
