@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""A fake `pactl` for the test suite.
+
+A CI runner has no PipeWire, so `pactl -f json list sinks|sources` fails and the device
+tests would have nothing to enumerate. Put this on PATH as `pactl` and they get the same
+shape of answer a real machine gives: outputs become `.monitor` inputs, a `.monitor`
+source is not a microphone, and the null/test sink is filtered by SKIP_HINTS.
+"""
+import json
+import sys
+
+SINKS = [
+    {"name": "fake_hdmi_stereo", "description": "Fake HDMI Output"},       # the hdmi device the selector test needs
+    {"name": "fake_usb_speakers", "description": "Fake USB Speakers"},
+    {"name": "notat_test_sink", "description": "Null Output"},             # "null" in the description -> filtered out
+]
+SOURCES = [
+    {"name": "usb-XHT_fake_wcam", "description": "WCAM110BK Digital MIC Analog Stereo"},  # the "excluded in config" test looks for this name
+    {"name": "fake_hdmi_stereo.monitor", "description": "Monitor of Fake HDMI Output"},
+]
+
+arg = sys.argv[-1]
+if arg == "get-default-sink":
+    print("fake_usb_speakers")
+elif arg == "get-default-source":
+    print("fake_usb_mic")
+elif "-f" in sys.argv and "list" in sys.argv:
+    print(json.dumps({"sinks": SINKS, "sources": SOURCES}.get(arg, [])))

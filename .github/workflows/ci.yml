@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"        # the version on the machine this is developed on
+
+      - name: ripgrep (the vault search test uses it)
+        run: sudo apt-get update -qq && sudo apt-get install -y ripgrep
+
+      - name: a runner has no PipeWire - hand the device tests a fake pactl
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -s "$PWD/tools/fake-pactl" "$RUNNER_TEMP/bin/pactl"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Syntax
+        run: python3 -m py_compile notat test_notat.py tools/*.py tools/fake-pactl
+
+      - name: Tests
+        run: python3 test_notat.py
+
+      # NOT covered here: the bar widget (needs quickshell + Qt) and the marketplace's own
+      # structure/security bots. The widget is checked on the machine with
+      # `omarchy plugin validate <folder>` and the popup regression script.

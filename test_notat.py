@@ -107,9 +107,22 @@ def test_summarize_returns_error_without_throwing():
 
 
 def test_ai_config_follows_omascribe():
-    endpoint, key, model = notat.ai_config()
-    assert endpoint.startswith("http"), endpoint
-    assert model, "model missing"
+    """The AI settings are read from OmaScribe's config - give it one instead of the machine's."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"ai_endpoint": "http://127.0.0.1:1/v1", "ai_model": "test-model"}, f)
+        path = f.name
+    old_cfg, notat.OMASCRIBE_CFG = notat.OMASCRIBE_CFG, path
+    old_env = {k: os.environ.pop(k, None) for k in ("NOTAT_AI_ENDPOINT", "NOTAT_AI_MODEL", "NOTAT_AI_KEY")}
+    try:
+        endpoint, _, model = notat.ai_config()
+        assert endpoint == "http://127.0.0.1:1/v1", endpoint
+        assert model == "test-model", model
+    finally:
+        notat.OMASCRIBE_CFG = old_cfg
+        os.unlink(path)
+        for k, v in old_env.items():
+            if v is not None:
+                os.environ[k] = v
 
 
 def _envelope(pattern, offset=0, scale=1.0):
