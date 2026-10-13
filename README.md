@@ -295,6 +295,18 @@ ffmpeg -i /tmp/f.mp3 -ac 1 -ar 16000 tools/facit.wav
 | Bar-knappen syns inte | `omarchy plugin enable io.github.alexwest1981.omanotation`, sedan `omarchy-restart-shell` |
 | Inget dokument efter stoppet | `notat status --json` säger om jobbet lever; barnets utskrift ligger i `~/.local/share/notat/raw/<mapp>/transcription.log`. Kör om med `notat transcribe "<mapp>"` |
 
+## Avinstallation
+
+```bash
+omarchy plugin remove io.github.alexwest1981.omanotation   # bar-knappen
+rm ~/.local/bin/notat                                      # kommandot
+rm -rf ~/.config/notat ~/.local/share/notat                # config, modeller, röstprofiler, rå ljud
+```
+
+Dokumenten ligger kvar i valvet (radera dem där du vill) — `notat senaste` visar sökvägen.
+Raden med `~/.local/share/notat` tar också bort de råa inspelningarna (`raw/`), de hämtade
+modellerna och röstprofilerna; inget av det ligger utanför de två mapparna.
+
 ## Licens
 
 MIT (se LICENSE). Modellvikterna har egna licenser: KB-Whisper är Apache-2.0 (KBLab,
