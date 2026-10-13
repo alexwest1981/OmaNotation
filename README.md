@@ -242,7 +242,10 @@ repository, so the path above was chosen.
 microphones, bleed and a voice that changes over time are not measured — that is why the name is
 marked `(voice)` in the document, why matching can be switched off, and why the voice profiles sit
 in `~/.local/share/notat/voices/` with mode 0600 (directory 0700) and are deleted with
-`notat forget`.
+`notat forget`. The matching itself joins your references and the unknown turn into one wav to hand
+to the diarisation — that copy carries the same audio, so it is written **outside the recording
+directory**, in `~/.local/share/notat/tmp/` (0700, file 0600), and removed again right after the
+comparison. Every wav `notat` writes is 0600, and a recording directory it creates is 0700.
 
 ## Where things end up
 
@@ -296,7 +299,7 @@ too. `install.sh` fetches `ggml-silero-v5.1.2.bin` (885 kB).
 ## Test
 
 ```bash
-python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search, the pinned download digests (33/33)
+python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search, the pinned download digests, the file modes of the voice matching (34/34)
 NOTAT_NETWORK=1 python3 test_notat.py   # + that every download URL returns a real file and that every pin is the digest the source publishes
 bash tools/e2e.sh                  # end to end through a virtual sink (no audio in the room)
 python3 tools/compare.py tools/reference.wav tools/reference.txt kb-whisper-small   # WER against known text
@@ -305,7 +308,7 @@ python3 tools/probe.py             # per track: level and what whisper heard (tr
 ```
 
 One test needs an HDMI output in `pactl` (`tools/fake-pactl` gives a CI runner one) — on a
-machine without one the suite reports 32/33 and names that test.
+machine without one the suite reports 33/34 and names that test.
 
 `tools/reference.wav` is not included (it is an audio file) — build it yourself from the reference
 text with any Swedish voice:

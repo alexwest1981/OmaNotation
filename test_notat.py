@@ -525,6 +525,65 @@ def test_voice_match_and_the_reference_file():
         shutil.rmtree(tmp)
 
 
+def test_voice_matching_keeps_its_copy_private():
+    """The voice matching must not leave a readable copy of the references anywhere.
+
+    Measured with umask 022 and a recording directory at 0755, i.e. the condition the review
+    named: the comparison wav is written 0600 into a 0700 scratch directory, never beside the
+    recording, and a wav the tool writes anywhere is 0600.
+    """
+    import math
+    import shutil
+    import wave
+    tmp = tempfile.mkdtemp()
+    old = (notat.TMP_ROOT, notat.VOICE_ROOT, notat.diar_turns)
+    notat.TMP_ROOT = os.path.join(tmp, "tmp")
+    notat.VOICE_ROOT = os.path.join(tmp, "voices")
+    seen = []
+
+    def fake_diar_turns(path, *a, **k):
+        # the joined file is 6 s reference + 1 s silence + 6 s turn; the unknown turn lands in
+        # the reference's cluster, which is what makes it a name
+        seen.append((path, os.stat(path).st_mode & 0o777))
+        return [(0.0, 6.0, "speaker_00"), (7.0, 13.0, "speaker_00")], None
+
+    notat.diar_turns = fake_diar_turns
+    raw = os.path.join(tmp, "raw", "2026-10-13 10-00")
+    os.makedirs(raw, mode=0o755)              # a recording directory from before the fix
+    rate = 16000
+    tone = b"".join(int(12000 * math.sin(2 * math.pi * 220 * i / rate)).to_bytes(2, "little", signed=True)
+                    for i in range(rate * 6))
+    turn = os.path.join(raw, "out1.wav")
+    with wave.open(turn, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(tone)
+    os.chmod(turn, 0o644)
+    umask = os.umask(0o022)
+    try:
+        assert notat.save_voice("Ada", turn) is True
+        ref = os.path.join(notat.VOICE_ROOT, "Ada.wav")
+        assert os.stat(ref).st_mode & 0o777 == 0o600, "the reference"
+
+        names = notat.known_voices(turn, [(0.0, 6.0, "spk1")], {"spk1": "Speaker 1"})
+        assert names == {"Speaker 1": "Ada"}, names       # the matching itself still works
+        assert len(seen) == 1, seen
+        compare, mode = seen[0]
+        assert mode == 0o600, f"the comparison wav was {oct(mode)}"
+        assert os.path.dirname(compare) == notat.TMP_ROOT, compare
+        assert os.stat(notat.TMP_ROOT).st_mode & 0o777 == 0o700, "the scratch directory"
+        assert sorted(os.listdir(raw)) == ["out1.wav"], "nothing may be left in the recording directory"
+
+        # the funnel: any wav this tool writes is 0600, even into an existing 0755 directory
+        plain = os.path.join(raw, "plain.wav")
+        notat.wav_write(plain, rate, [tone[:rate]], silence=0)
+        assert os.stat(plain).st_mode & 0o777 == 0o600, oct(os.stat(plain).st_mode & 0o777)
+        notat.private_dir(raw)
+        assert os.stat(raw).st_mode & 0o777 == 0o700, "an old 0755 recording directory is tightened"
+    finally:
+        os.umask(umask)
+        notat.TMP_ROOT, notat.VOICE_ROOT, notat.diar_turns = old
+        shutil.rmtree(tmp)
+
+
 def test_search_and_latest_in_the_vault():
     """Search and latest against a temporary vault - rg is the tool, no index needed."""
     import shutil

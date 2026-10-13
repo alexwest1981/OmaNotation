@@ -128,6 +128,10 @@ for _f in DIAR_FILES:               # what must exist for the diarisation to wor
 # the voice is saved here, and the next meeting gets the name by itself. A voice is biometrics:
 # the directory is 0700 and the files are 0600, `notat forget <name>` deletes them.
 VOICE_ROOT = os.path.join(HOME, ".local/share/notat/voices")
+# Scratch for the voice matching: a copy of the references plus the unknown turn, one wav.
+# It carries the same biometrics as the registry, so it is never written into the recording
+# directory - it lives in its own 0700 directory (files 0600, from wav_write).
+TMP_ROOT = os.path.join(HOME, ".local/share/notat/tmp")
 VOICE_CLIP = 8.0                    # seconds of audio per reference and per comparison
 VOICE_MIN = 2.0                      # a turn shorter than that is no good as a voice sample
 VOICE_THRESHOLD = (os.environ.get("NOTAT_VOICE_THRESHOLD")
@@ -473,22 +477,35 @@ def wav_read(path, start=0.0, end=None):
         return None, None
 
 
+def private_dir(path):
+    """makedirs 0700, and tightens a directory an earlier version left at 0755."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    if os.stat(path).st_mode & 0o077:
+        os.chmod(path, 0o700)
+    return path
+
+
 def wav_write(path, rate, pieces, silence=1.0):
     """Writes the pieces as ONE wav with silence between them (the diarisation needs the boundary).
 
     Temp + rename, like the document: a half-written reference must not be readable
-    and become a mismatch.
+    and become a mismatch. Every wav this tool writes is 0600 (fchmod, so the umask cannot
+    loosen it) and the rename keeps the mode - a voice profile or a comparison copy is
+    never readable by another user, wherever it is written.
     """
     import wave
     silent = b"\x00\x00" * int(rate * silence)
-    with wave.open(path + ".del", "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        for i, chunk in enumerate(pieces):
-            if i:
-                w.writeframes(silent)
-            w.writeframes(chunk)
+    fd = os.open(path + ".del", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as raw:
+        with wave.open(raw, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            for i, chunk in enumerate(pieces):
+                if i:
+                    w.writeframes(silent)
+                w.writeframes(chunk)
     os.replace(path + ".del", path)
 
 
@@ -571,7 +588,7 @@ def known_voice(clip_wav, refs):
         return None
     pieces.append(data)
     times.append((rate, len(data) / 2 / rate))
-    tmp = clip_wav + ".compare.wav"
+    tmp = os.path.join(private_dir(TMP_ROOT), os.path.basename(clip_wav) + ".compare.wav")
     wav_write(tmp, rate, pieces, silence=1.0)
     try:
         seg = diar_turns(tmp, 0, VOICE_THRESHOLD)[0]
@@ -609,7 +626,7 @@ def known_voices(wav, turns, labels, env=None):
         clip = wav_read(wav, a, b)
         if not clip[0]:
             continue
-        tmp = os.path.join(os.path.dirname(wav), f".voice_{spk}.wav")
+        tmp = os.path.join(private_dir(TMP_ROOT), f"voice_{spk}.wav")
         wav_write(tmp, clip[0], [clip[1]], silence=0)
         try:
             name = known_voice(tmp, refs)
@@ -1014,7 +1031,8 @@ def cmd_start(_args):
     while os.path.exists(os.path.join(outdir, "session.json")):
         outdir = os.path.join(RAW_ROOT, f"{stamp}-{n}")   # two recordings in the same minute
         n += 1
-    os.makedirs(outdir, exist_ok=True)
+    private_dir(RAW_ROOT)
+    private_dir(outdir)
     started = []
     for i, (kind, node, label, desc) in enumerate(tracks, 1):
         name = f"{kind}{i}"
