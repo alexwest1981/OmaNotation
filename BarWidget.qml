@@ -27,6 +27,10 @@ BarWidget {
   property string nedladdning: ""    // id currently being downloaded
   property int nedladdningProcent: 0
   property string felText: ""
+  // The bar's tooltip only considers a target that answers `tooltipHovered`
+  // (Bar.targetTooltipHovered). Without it showTooltip() returns early and the
+  // tooltip texts below could never be seen.
+  readonly property bool tooltipHovered: mouseArea.containsMouse
 
   function mmss(s) {
     return Math.floor(s / 60).toString().padStart(2, "0") + ":" +
@@ -98,6 +102,17 @@ BarWidget {
       hamtaProc.command = [root.bin, "speakers", "fetch"]
       hamtaProc.running = true
     }
+  }
+
+  // PopupCard.close() hands the dismissal back to the owner when the owner has
+  // a `close` method (PopupCard.qml:73). The focus grab calls it whenever you
+  // click outside, so without this method PopupCard falls through to
+  // `root.open = false` — an imperative write that destroys the
+  // `open: root.popupOpen` binding and leaves popupOpen stuck true: the menu
+  // never opens again and the first click on the icon is eaten clearing the
+  // stale flag.
+  function close() {
+    root.popupOpen = false
   }
 
   function toggle() {
@@ -328,6 +343,7 @@ BarWidget {
   }
 
   MouseArea {
+    id: mouseArea
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
