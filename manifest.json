@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.alexwest1981.omanotation",
   "name": "OmaNotation",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": "Alex Weström",
   "description": "Record meetings and lectures (both audio sides) and get a document with a speaker-labelled transcript and an AI summary.",
   "license": "MIT",

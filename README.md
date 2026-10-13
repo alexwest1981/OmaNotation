@@ -246,6 +246,11 @@ in `~/.local/share/notat/voices/` with mode 0600 (directory 0700) and are delete
 to the diarisation — that copy carries the same audio, so it is written **outside the recording
 directory**, in `~/.local/share/notat/tmp/` (0700, file 0600), and removed again right after the
 comparison. Every wav `notat` writes is 0600, and a recording directory it creates is 0700.
+The same holds for the text: the event log carries the meeting's own details (title, participants,
+speaker names), so it is 0600 in a 0700 `~/.local/share/notat/`, and everything written through the
+session file, the document and the config is 0600 — set on the file descriptor, so the umask cannot
+loosen it, and a file **or directory** an earlier version left readable is tightened the next time
+`notat` writes there.
 
 ## Where things end up
 
@@ -264,7 +269,7 @@ comparison. Every wav `notat` writes is 0600, and a recording directory it creat
 - **Models:** `~/.local/share/notat/models/<id>/`.
 - **Speaker separation:** `~/.local/share/notat/diar/` (the sherpa-onnx binary and the ONNX
   models, ~70 MB; `notat speakers fetch` fetches them).
-- **Log:** `~/.local/share/notat/notat.log` (who called what).
+- **Log:** `~/.local/share/notat/notat.log` (who called what; 0600, directory 0700).
 
 ## Settings — `~/.config/notat/config.json`
 
@@ -299,7 +304,7 @@ too. `install.sh` fetches `ggml-silero-v5.1.2.bin` (885 kB).
 ## Test
 
 ```bash
-python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search, the pinned download digests, the file modes of the voice matching (34/34)
+python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search, the pinned download digests, the file modes of the voice matching and of the log/session file (35/35)
 NOTAT_NETWORK=1 python3 test_notat.py   # + that every download URL returns a real file and that every pin is the digest the source publishes
 bash tools/e2e.sh                  # end to end through a virtual sink (no audio in the room)
 python3 tools/compare.py tools/reference.wav tools/reference.txt kb-whisper-small   # WER against known text

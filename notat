@@ -940,7 +940,7 @@ def job_write(pid, rawdir, seconds):
     instead of keeping the state in QML memory: reloading the plugin clears the
     memory, not the file."""
     try:
-        os.makedirs(STATE, exist_ok=True)
+        private_dir(STATE)                     # 0700: the job file names the recording being made
         with open(JOB, "w", encoding="utf-8") as f:
             json.dump({"pid": pid, "dir": rawdir, "seconds": seconds,
                        "started": time.time()}, f)
@@ -976,16 +976,24 @@ def running(sess):
 
 
 def log(msg):
-    """Small event log: who (the parent) did what - otherwise it cannot be investigated."""
+    """Small event log: who (the parent) did what - otherwise it cannot be investigated.
+
+    The log carries the meeting's own details (title, participants, speaker names) and the
+    recording it belongs to, so the file is 0600 and its directory 0700 - fchmod right after
+    open, so the umask cannot loosen it, and a 0644 log an older version left behind is
+    tightened by the next line written.
+    """
     try:
-        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        private_dir(os.path.dirname(LOG))
         ppid = os.getppid()
         try:
             with open(f"/proc/{ppid}/cmdline", "rb") as f:
                 parent = f.read().replace(b"\0", b" ").decode(errors="replace").strip()[:120]
         except OSError:
             parent = "?"
-        with open(LOG, "a", encoding="utf-8") as f:
+        fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat(timespec='seconds')} {msg} (parent {ppid}: {parent})\n")
     except OSError:
         pass
@@ -1009,10 +1017,15 @@ def write_atomic(path, text):
 
     Temp + os.replace: a crash in the middle of writing must not leave a half
     document (the note becomes empty/truncated) or a half session.json (which
-    then looks like "no recording").
+    then looks like "no recording"). 0600 on the descriptor, so the umask cannot
+    make it readable: everything written through here is the owner's own - the
+    recording's session.json (title, participants, speaker names), the document
+    and the config.
     """
     tmp = path + ".del"
-    with open(tmp, "w", encoding="utf-8") as f:
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
     os.replace(tmp, path)
 
@@ -1061,7 +1074,7 @@ def cmd_start(_args):
                          ensure_ascii=False))
         return 1
     info = {"started": time.time(), "dir": outdir, "tracks": live, "pid": live[0]["pid"]}
-    os.makedirs(STATE, exist_ok=True)
+    private_dir(STATE)                         # also when RUNTIME fell back to /tmp
     text = json.dumps(info, ensure_ascii=False)
     for path in (SESSION, os.path.join(outdir, "session.json")):
         write_atomic(path, text)
@@ -1717,6 +1730,7 @@ def cmd_meeting(args):
         for key in ("title", "participants", "names"):
             meta.pop(key, None)
     try:
+        private_dir(folder)                    # session.json carries the meeting's own details
         write_atomic(meta_path, json.dumps(meta, ensure_ascii=False))
     except OSError as e:
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))

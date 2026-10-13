@@ -584,6 +584,60 @@ def test_voice_matching_keeps_its_copy_private():
         shutil.rmtree(tmp)
 
 
+def test_meeting_details_are_not_world_readable():
+    """The event log and the session file carry the meeting's own details: neither may be readable.
+
+    Measured with umask 022, a share directory and a recording directory from before the fix
+    (0755) and a log from before the fix (0644): the next line written tightens file and
+    directory, the details are still appended rather than lost, and session.json (the card the
+    review named) lands 0600 both through the funnel and through `notat meeting`.
+    """
+    import contextlib
+    import io
+    import shutil
+    tmp = tempfile.mkdtemp()
+    old = (notat.LOG, notat.load_session, notat.latest_raw)
+    umask = os.umask(0o022)
+    try:
+        share = os.path.join(tmp, "share", "notat")
+        os.makedirs(share, mode=0o755)                     # a share directory from before the fix
+        notat.LOG = os.path.join(share, "notat.log")
+        with open(notat.LOG, "w", encoding="utf-8") as f:  # and a log from before the fix
+            f.write("old line\n")
+        os.chmod(notat.LOG, 0o644)
+
+        notat.log("meeting: title='Lonesamtal' participants=['Ada'] names={'spk1': 'Ada'}")
+        assert os.stat(notat.LOG).st_mode & 0o777 == 0o600, oct(os.stat(notat.LOG).st_mode & 0o777)
+        assert os.stat(share).st_mode & 0o777 == 0o700, oct(os.stat(share).st_mode & 0o777)
+        with open(notat.LOG, encoding="utf-8") as f:
+            body = f.read()
+        assert body.startswith("old line\n") and "Lonesamtal" in body, body   # appended, not truncated
+
+        os.remove(notat.LOG)                               # and a log that does not exist yet
+        notat.log("meeting: title='Nytt'")
+        assert os.stat(notat.LOG).st_mode & 0o777 == 0o600, oct(os.stat(notat.LOG).st_mode & 0o777)
+        with open(notat.LOG, encoding="utf-8") as f:
+            assert "Nytt" in f.read()
+
+        raw = os.path.join(tmp, "raw", "2026-10-13 10-00")
+        os.makedirs(raw, mode=0o755)                       # a recording directory from before the fix
+        card = os.path.join(raw, "session.json")
+        notat.write_atomic(card, json.dumps({"title": "Lonesamtal", "participants": ["Ada"]}))
+        assert os.stat(card).st_mode & 0o777 == 0o600, "the funnel"
+        assert json.load(open(card, encoding="utf-8"))["title"] == "Lonesamtal"
+
+        notat.load_session = lambda: {"dir": raw}
+        notat.latest_raw = lambda: raw
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert notat.cmd_meeting({"_": ["Lonesamtal"], "participants": "Ada"}) == 0
+        assert os.stat(raw).st_mode & 0o777 == 0o700, "an old 0755 recording directory is tightened"
+        assert os.stat(card).st_mode & 0o777 == 0o600, "session.json after `notat meeting`"
+    finally:
+        os.umask(umask)
+        notat.LOG, notat.load_session, notat.latest_raw = old
+        shutil.rmtree(tmp)
+
+
 def test_search_and_latest_in_the_vault():
     """Search and latest against a temporary vault - rg is the tool, no index needed."""
     import shutil
