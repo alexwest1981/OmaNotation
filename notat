@@ -643,14 +643,23 @@ LEGACY_KEYS = {"exclude": "uteslut", "model": "modell", "speakers": "röster",
 
 
 def notat_config():
+    """The config, with the pre-1.2.0 Swedish keys folded in.
+
+    The old key wins while the new one is missing *or empty*, because a writer that only knew
+    about the new key (say the bar toggling a device before anything else was rewritten) would
+    otherwise leave an empty `exclude` next to a set `uteslut` and the exclusion list would be
+    silently gone - measured on Alex's own config. The old key is dropped on the way out, so the
+    next write leaves one set of keys behind.
+    """
     try:
         with open(CONFIG, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception:
         return {}
     for new, old in LEGACY_KEYS.items():
-        if new not in cfg and old in cfg:
+        if (new not in cfg or not cfg[new]) and cfg.get(old):
             cfg[new] = cfg[old]
+        cfg.pop(old, None)
     return cfg
 
 

@@ -537,6 +537,36 @@ def test_search_and_latest_in_the_vault():
         shutil.rmtree(d)
 
 
+def test_legacy_config_keys_carry_over_once():
+    """A pre-1.2.0 config (Swedish keys) is read as the new one, and an empty new key must not
+    shadow a set old one - the bar can write `exclude: []` before the file is ever rewritten."""
+    import shutil
+    d = tempfile.mkdtemp()
+    path = os.path.join(d, "config.json")
+    old = notat.CONFIG
+    notat.CONFIG = path
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"uteslut": ["WCAM"], "röster": True, "modell": "kb-whisper-small",
+                       "antal_talare": 3, "valv": "~/V"}, f)
+        cfg = notat.notat_config()
+        assert cfg["exclude"] == ["WCAM"] and cfg["speakers"] is True, cfg
+        assert cfg["model"] == "kb-whisper-small", cfg
+        assert cfg["speaker_count"] == 3 and cfg["vault"] == "~/V", cfg
+        assert not any(k in cfg for k in notat.LEGACY_KEYS.values()), cfg   # one source of truth
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"exclude": [], "uteslut": ["WCAM"]}, f)
+        assert notat.notat_config()["exclude"] == ["WCAM"], "empty new key must not shadow the old"
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"exclude": ["NEW"], "uteslut": ["WCAM"]}, f)
+        assert notat.notat_config()["exclude"] == ["NEW"], "a set new key wins"
+    finally:
+        notat.CONFIG = old
+        shutil.rmtree(d)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

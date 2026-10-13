@@ -283,7 +283,7 @@ too. `install.sh` fetches `ggml-silero-v5.1.2.bin` (885 kB).
 ## Test
 
 ```bash
-python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search (28/28)
+python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search (29/29)
 NOTAT_NETWORK=1 python3 test_notat.py   # + that every download URL returns a real file
 bash tools/e2e.sh                  # end to end through a virtual sink (no audio in the room)
 python3 tools/compare.py tools/reference.wav tools/reference.txt kb-whisper-small   # WER against known text
