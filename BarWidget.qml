@@ -9,20 +9,22 @@ BarWidget {
   moduleName: "io.github.alexwest1981.omanotation"
 
   readonly property string bin: Quickshell.env("HOME") + "/.local/bin/notat"
-  readonly property string vaultDir: Quickshell.env("HOME") + "/Documents/OmaScribe Vault/Inspelningar"
+  // The CLI decides where the documents are (it keeps a pre-1.1.1 Inspelningar/ folder if one
+  // exists), so the folder is read from `notat devices` and this is only the first guess.
+  property string vaultDir: Quickshell.env("HOME") + "/Documents/OmaScribe Vault/Recordings"
   readonly property color fg: root.bar ? root.bar.foreground : Color.foreground
   readonly property color recColor: "#f87171"
   readonly property color dimFg: Qt.darker(root.fg, 1.35)
 
   property bool recording: false
-  property bool busy: false          // notat transkriberar (läses ur notat status)
-  property int seconds: 0            // inspelningens längd
-  property int jobSeconds: 0         // transkriberingens längd
+  property bool busy: false          // notat is transcribing (read from notat status)
+  property int seconds: 0            // length of the recording
+  property int jobSeconds: 0         // length of the transcription
   property bool popupOpen: false
-  property var enheter: []           // [{typ, nod, talare, beskrivning, vald}]
-  property var modeller: []          // [{id, namn, mb, beskrivning, finns, vald}]
-  property var roster: ({})          // {på, nedladdade, tröskel, antal_talare}
-  property string nedladdning: ""    // id som laddas ner just nu
+  property var enheter: []           // [{kind, node, speaker, description, selected}]
+  property var modeller: []          // [{id, name, mb, description, downloaded, selected}]
+  property var roster: ({})          // {on, downloaded, threshold, speaker_count}
+  property string nedladdning: ""    // id currently being downloaded
   property int nedladdningProcent: 0
   property string felText: ""
 
@@ -31,20 +33,20 @@ BarWidget {
            (s % 60).toString().padStart(2, "0")
   }
 
-  // Klockan visar inspelningen medan den rullar, annars hur länge jobbet kört.
+  // The clock shows the recording while it runs, otherwise how long the job has been going.
   readonly property string clock: root.mmss(root.recording ? root.seconds : root.jobSeconds)
 
   readonly property string modellNamn: {
     for (var i = 0; i < root.modeller.length; i++)
-      if (root.modeller[i].vald) return root.modeller[i].id
+      if (root.modeller[i].selected) return root.modeller[i].id
     return ""
   }
 
   implicitWidth: contentRow.implicitWidth + Style.space(14)
   implicitHeight: barSize
 
-  // Hjälper felsökning: syns i journalen (journalctl --user -f | grep notat) när widgeten laddas
-  Component.onCompleted: console.log("notat: bar-widget laddad")
+  // Helps debugging: shows in the journal (journalctl --user -f | grep notat) when the widget loads
+  Component.onCompleted: console.log("notat: bar widget loaded")
 
   function refresh() {
     if (!statusProc.running) statusProc.running = true
@@ -66,34 +68,34 @@ BarWidget {
   }
 
   function valj(nod) {
-    valjProc.command = [root.bin, "valj", nod]
+    valjProc.command = [root.bin, "select", nod]
     valjProc.running = true
   }
 
-  // Finns modellen: byt till den. Saknas den: ladda ner den (en i taget).
+  // If the model is there: switch to it. If it is missing: download it (one at a time).
   function valjModell(m) {
-    if (m.finns) {
-      modellValProc.command = [root.bin, "modell", m.id]
+    if (m.downloaded) {
+      modellValProc.command = [root.bin, "model", m.id]
       modellValProc.running = true
     } else if (root.nedladdning === "") {
       root.felText = ""
       root.nedladdning = m.id
       root.nedladdningProcent = 0
-      hamtaProc.command = [root.bin, "hamta", m.id]
+      hamtaProc.command = [root.bin, "download", m.id]
       hamtaProc.running = true
     }
   }
 
-  // Röstuppdelningen: växel om modellerna finns, annars laddas de ner först
+  // Speaker separation: a toggle when the models are there, otherwise they are downloaded first
   function vaxlaRoster() {
-    if (root.roster.nedladdade === true) {
-      rosterProc.command = [root.bin, "röster", root.roster.på === true ? "av" : "på"]
+    if (root.roster.downloaded === true) {
+      rosterProc.command = [root.bin, "speakers", root.roster.on === true ? "off" : "on"]
       rosterProc.running = true
     } else if (root.nedladdning === "") {
       root.felText = ""
-      root.nedladdning = "talaruppdelningen"
+      root.nedladdning = "speaker separation"
       root.nedladdningProcent = 0
-      hamtaProc.command = [root.bin, "diar-hamta"]
+      hamtaProc.command = [root.bin, "speakers", "fetch"]
       hamtaProc.running = true
     }
   }
@@ -107,11 +109,11 @@ BarWidget {
 
   function tooltip() {
     var modell = root.modellNamn ? " · " + root.modellNamn : ""
-    var röst = root.roster.på === true ? " · röster" : ""
-    if (root.busy) return "Notat transkriberar " + root.clock + modell + röst +
-                          " — dokumentet kommer när det är klart. Högerklick: källor, modell och röster."
-    if (root.recording) return "Spelar in " + root.clock + modell + röst + " — klick stoppar och gör dokument. Högerklick: källor, modell och röster."
-    return "Klick: anteckna mötet/föreläsningen" + modell + röst + ". Högerklick: välj källor, modell och röster."
+    var voice = root.roster.on === true ? " · voices" : ""
+    if (root.busy) return "Notat is transcribing " + root.clock + modell + voice +
+                          " — the document comes when it is done. Right-click: sources, model and voices."
+    if (root.recording) return "Recording " + root.clock + modell + voice + " — a click stops and makes the document. Right-click: sources, model and voices."
+    return "Click: take notes of the meeting/lecture" + modell + voice + ". Right-click: choose sources, model and voices."
   }
 
   Process {
@@ -152,10 +154,11 @@ BarWidget {
       onStreamFinished: {
         try {
           var d = JSON.parse(text.trim())
-          root.enheter = d.enheter || []
-          root.roster = d.röster || ({})
+          root.enheter = d.devices || []
+          root.roster = d.speakers || ({})
+          if (d.vault) root.vaultDir = d.vault
         } catch (e) {
-          root.felText = "kunde inte läsa enhetslistan"
+          root.felText = "could not read the device list"
         }
       }
     }
@@ -163,15 +166,15 @@ BarWidget {
 
   Process {
     id: rosterProc
-    // command sätts i vaxlaRoster() innan running
+    // command is set in vaxlaRoster() before running
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         try {
           var svar = JSON.parse(text.trim())
-          if (svar.ok === false) root.felText = svar.error || "kunde inte ändra"
+          if (svar.ok === false) root.felText = svar.error || "could not change it"
         } catch (e) {
-          root.felText = "oväntat svar från notat röster"
+          root.felText = "unexpected response from notat speakers"
         }
       }
     }
@@ -182,15 +185,15 @@ BarWidget {
 
   Process {
     id: valjProc
-    // command sätts i valj() innan running
+    // command is set in valj() before running
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         try {
           var svar = JSON.parse(text.trim())
-          if (svar.ok === false) root.felText = svar.error || "kunde inte ändra"
+          if (svar.ok === false) root.felText = svar.error || "could not change it"
         } catch (e) {
-          root.felText = "oväntat svar från notat valj"
+          root.felText = "unexpected response from notat select"
         }
       }
     }
@@ -201,7 +204,7 @@ BarWidget {
 
   Process {
     id: allaProc
-    command: [root.bin, "valj", "alla"]
+    command: [root.bin, "select", "all"]
     onExited: function (code) {
       root.hamtaEnheter()
     }
@@ -209,14 +212,14 @@ BarWidget {
 
   Process {
     id: modellProc
-    command: [root.bin, "modeller"]
+    command: [root.bin, "models"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         try {
-          root.modeller = JSON.parse(text.trim()).modeller || []
+          root.modeller = JSON.parse(text.trim()).models || []
         } catch (e) {
-          root.felText = "kunde inte läsa modellistan"
+          root.felText = "could not read the model list"
         }
       }
     }
@@ -224,15 +227,15 @@ BarWidget {
 
   Process {
     id: modellValProc
-    // command sätts i valjModell() innan running
+    // command is set in valjModell() before running
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         try {
           var svar = JSON.parse(text.trim())
-          if (svar.ok === false) root.felText = svar.error || "kunde inte byta modell"
+          if (svar.ok === false) root.felText = svar.error || "could not switch model"
         } catch (e) {
-          root.felText = "oväntat svar från notat modell"
+          root.felText = "unexpected response from notat model"
         }
       }
     }
@@ -243,13 +246,13 @@ BarWidget {
 
   Process {
     id: hamtaProc
-    // command sätts i valjModell() innan running
+    // command is set in valjModell() before running
     stdout: SplitParser {
       onRead: function (line) {
         try {
           var d = JSON.parse(String(line).trim())
-          if (d.procent !== undefined) root.nedladdningProcent = d.procent
-          if (d.ok === false) root.felText = d.error || "nedladdningen misslyckades"
+          if (d.percent !== undefined) root.nedladdningProcent = d.percent
+          if (d.ok === false) root.felText = d.error || "the download failed"
         } catch (e) {
         }
       }
@@ -348,7 +351,7 @@ BarWidget {
   }
 
   // ---------------------------------------------------------------------------
-  // Källor och modell (skrivs till notat config via kommandoraden)
+  // Sources and model (written to notat config via the command line)
   // ---------------------------------------------------------------------------
   PopupCard {
     id: popup
@@ -365,7 +368,7 @@ BarWidget {
       spacing: Style.space(8)
 
       Text {
-        text: "Källor att spela in"
+        text: "Sources to record"
         color: root.fg
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.subtitle
@@ -375,8 +378,8 @@ BarWidget {
       Text {
         width: popCol.width
         text: root.recording
-              ? "Inspelningen rullar — ändringen gäller nästa gång"
-              : "Klicka på en enhet för att slå av eller på den"
+              ? "The recording is running — the change applies next time"
+              : "Click a device to turn it off or on"
         color: root.dimFg
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
@@ -392,9 +395,9 @@ BarWidget {
           width: popCol.width
           height: Style.space(36)
           radius: Style.spacing.labelGap
-          color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, modelData.vald ? 0.10 : 0.03)
+          color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, modelData.selected ? 0.10 : 0.03)
           border.width: 1
-          border.color: modelData.vald
+          border.color: modelData.selected
                         ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.55)
                         : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.12)
 
@@ -409,16 +412,16 @@ BarWidget {
               height: Style.spaceReal(12)
               radius: Style.spaceReal(3)
               anchors.verticalCenter: parent.verticalCenter
-              color: modelData.vald ? Color.accent : "transparent"
+              color: modelData.selected ? Color.accent : "transparent"
               border.width: 1
-              border.color: modelData.vald ? Color.accent : root.dimFg
+              border.color: modelData.selected ? Color.accent : root.dimFg
             }
 
             Text {
               width: popCol.width - Style.space(115)
               anchors.verticalCenter: parent.verticalCenter
-              text: modelData.beskrivning
-              color: modelData.vald ? root.fg : root.dimFg
+              text: modelData.description
+              color: modelData.selected ? root.fg : root.dimFg
               elide: Text.ElideRight
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.bodySmall
@@ -426,7 +429,7 @@ BarWidget {
 
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              text: modelData.typ === "ut" ? "utgång" : "mikrofon"
+              text: modelData.kind === "out" ? "output" : "microphone"
               color: root.dimFg
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption
@@ -437,7 +440,7 @@ BarWidget {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.valj(modelData.nod)
+            onClicked: root.valj(modelData.node)
           }
         }
       }
@@ -449,7 +452,7 @@ BarWidget {
       }
 
       Text {
-        text: "Modell"
+        text: "Model"
         color: root.fg
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.subtitle
@@ -458,7 +461,7 @@ BarWidget {
 
       Text {
         width: popCol.width
-        text: "Klicka för att byta. Saknas modellen laddas den ner först."
+        text: "Click to switch. If the model is missing it is downloaded first."
         color: root.dimFg
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
@@ -474,9 +477,9 @@ BarWidget {
           width: popCol.width
           height: Style.space(42)
           radius: Style.spacing.labelGap
-          color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, modelData.vald ? 0.10 : 0.03)
+          color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, modelData.selected ? 0.10 : 0.03)
           border.width: 1
-          border.color: modelData.vald
+          border.color: modelData.selected
                         ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.55)
                         : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.12)
 
@@ -496,16 +499,16 @@ BarWidget {
                 height: Style.spaceReal(12)
                 radius: Style.spaceReal(3)
                 anchors.verticalCenter: parent.verticalCenter
-                color: modelData.vald ? Color.accent : "transparent"
+                color: modelData.selected ? Color.accent : "transparent"
                 border.width: 1
-                border.color: modelData.vald ? Color.accent : root.dimFg
+                border.color: modelData.selected ? Color.accent : root.dimFg
               }
 
               Text {
                 width: popCol.width - Style.space(200)
                 anchors.verticalCenter: parent.verticalCenter
-                text: modelData.namn
-                color: modelData.vald ? root.fg : (modelData.finns ? root.fg : root.dimFg)
+                text: modelData.name
+                color: modelData.selected ? root.fg : (modelData.downloaded ? root.fg : root.dimFg)
                 elide: Text.ElideRight
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
                 font.pixelSize: Style.font.bodySmall
@@ -515,18 +518,18 @@ BarWidget {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.nedladdning === modelData.id
                       ? root.nedladdningProcent + " %"
-                      : (modelData.vald ? "vald"
-                         : (modelData.finns ? "välj" : "ladda ner " + modelData.mb + " MB"))
-                color: modelData.vald ? Color.accent : root.dimFg
+                      : (modelData.selected ? "selected"
+                         : (modelData.downloaded ? "choose" : "download " + modelData.mb + " MB"))
+                color: modelData.selected ? Color.accent : root.dimFg
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
                 font.pixelSize: Style.font.caption
-                font.bold: modelData.vald
+                font.bold: modelData.selected
               }
             }
 
             Text {
               width: parent.width
-              text: modelData.beskrivning
+              text: modelData.description
               color: root.dimFg
               elide: Text.ElideRight
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -534,7 +537,7 @@ BarWidget {
             }
           }
 
-          // nedladdningsmätare
+          // download progress bar
           Rectangle {
             visible: root.nedladdning === modelData.id
             anchors.left: parent.left
@@ -561,7 +564,7 @@ BarWidget {
       }
 
       Text {
-        text: "Röster"
+        text: "Voices"
         color: root.fg
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.subtitle
@@ -570,8 +573,8 @@ BarWidget {
 
       Text {
         width: popCol.width
-        text: "Rösterna i mötet får egna namn (Deltagare 1, 2 …) i stället för ett enda \"Mötet\". "
-              + "Din egen mikrofon är alltid \"Du\". Kostar extra tid: cirka en femtedel av inspelningens längd."
+        text: "The voices in the meeting get their own names (Speaker 1, 2 …) instead of a single \"Meeting\". "
+              + "Your own microphone is always \"You\". Costs extra time: about a fifth of the recording's length."
         color: root.dimFg
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.caption
@@ -582,9 +585,9 @@ BarWidget {
         width: popCol.width
         height: Style.space(42)
         radius: Style.spacing.labelGap
-        color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, root.roster.på ? 0.10 : 0.03)
+        color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, root.roster.on ? 0.10 : 0.03)
         border.width: 1
-        border.color: root.roster.på
+        border.color: root.roster.on
                       ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.55)
                       : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.12)
 
@@ -604,15 +607,15 @@ BarWidget {
               height: Style.spaceReal(12)
               radius: Style.spaceReal(3)
               anchors.verticalCenter: parent.verticalCenter
-              color: root.roster.på ? Color.accent : "transparent"
+              color: root.roster.on ? Color.accent : "transparent"
               border.width: 1
-              border.color: root.roster.på ? Color.accent : root.dimFg
+              border.color: root.roster.on ? Color.accent : root.dimFg
             }
 
             Text {
               width: popCol.width - Style.space(200)
               anchors.verticalCenter: parent.verticalCenter
-              text: "Särskilj röster"
+              text: "Separate voices"
               color: root.fg
               elide: Text.ElideRight
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -621,23 +624,23 @@ BarWidget {
 
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              text: root.roster.nedladdade !== true
-                    ? "ladda ner 70 MB"
-                    : (root.roster.på === true ? "på" : "av")
-              color: root.roster.på ? Color.accent : root.dimFg
+              text: root.roster.downloaded !== true
+                    ? "download 70 MB"
+                    : (root.roster.on === true ? "on" : "off")
+              color: root.roster.on ? Color.accent : root.dimFg
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption
-              font.bold: root.roster.på === true
+              font.bold: root.roster.on === true
             }
           }
 
           Text {
             width: parent.width
-            text: root.roster.nedladdade !== true
-                  ? "sherpa-onnx + röstmodeller (ingen molntjänst)"
-                  : ("antal talare: " + (root.roster.antal_talare > 0
-                     ? root.roster.antal_talare + " (fastställt)"
-                     : "hittas automatiskt"))
+            text: root.roster.downloaded !== true
+                  ? "sherpa-onnx + voice models (no cloud service)"
+                  : ("speaker count: " + (root.roster.speaker_count > 0
+                     ? root.roster.speaker_count + " (fixed)"
+                     : "detected automatically"))
             color: root.dimFg
             elide: Text.ElideRight
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -646,7 +649,7 @@ BarWidget {
         }
 
         Rectangle {
-          visible: root.nedladdning === "talaruppdelningen"
+          visible: root.nedladdning === "speaker separation"
           anchors.left: parent.left
           anchors.bottom: parent.bottom
           height: Style.spaceReal(3)
@@ -657,7 +660,7 @@ BarWidget {
         MouseArea {
           anchors.fill: parent
           hoverEnabled: true
-          enabled: root.nedladdning === "" || root.nedladdning === "talaruppdelningen"
+          enabled: root.nedladdning === "" || root.nedladdning === "speaker separation"
           cursorShape: Qt.PointingHandCursor
           onClicked: root.vaxlaRoster()
         }
@@ -666,8 +669,8 @@ BarWidget {
       Text {
         visible: root.nedladdning !== ""
         width: popCol.width
-        text: "Laddar ner " + (root.nedladdning === "talaruppdelningen"
-              ? "talaruppdelningen (~70 MB)" : root.nedladdning)
+        text: "Downloading " + (root.nedladdning === "speaker separation"
+              ? "the speaker separation (~70 MB)" : root.nedladdning)
               + (root.nedladdningProcent > 0 ? " — " + root.nedladdningProcent + " %" : " …")
         color: Color.accent
         wrapMode: Text.WordWrap
@@ -691,24 +694,24 @@ BarWidget {
         WidgetButton {
           bar: root.bar
           fixedHeight: Style.space(30)
-          text: "Slå på alla"
-          tooltipText: "Spela in samtliga enheter igen"
+          text: "Turn on all"
+          tooltipText: "Record all devices again"
           onPressed: function () { allaProc.running = true }
         }
 
         WidgetButton {
           bar: root.bar
           fixedHeight: Style.space(30)
-          text: "Uppdatera"
-          tooltipText: "Läs enhets- och modellistan på nytt"
+          text: "Refresh"
+          tooltipText: "Read the device and model list again"
           onPressed: function () { root.hamtaEnheter(); root.hamtaModeller() }
         }
 
         WidgetButton {
           bar: root.bar
           fixedHeight: Style.space(30)
-          text: "Öppna mappen"
-          tooltipText: "Öppna mappen med dokumenten"
+          text: "Open folder"
+          tooltipText: "Open the folder with the documents"
           onPressed: function () { openVaultProc.running = true }
         }
       }

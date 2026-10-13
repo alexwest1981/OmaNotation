@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Kontroller av notat:s logik som inte kräver ljudenheter.
+"""Checks of notat's logic that do not require audio devices.
 
-  python3 test_notat.py     (0 = allt ok)
+  python3 test_notat.py     (0 = everything ok)
 """
 import importlib.machinery
 import importlib.util
@@ -16,7 +16,7 @@ notat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(notat)
 
 
-def test_segments_hoppar_over_brus():
+def test_segments_skip_noise():
     data = {"transcription": [
         {"offsets": {"from": 0, "to": 2000}, "text": " Hej och välkomna till föreläsningen. "},
         {"offsets": {"from": 2000, "to": 3000}, "text": ""},
@@ -24,38 +24,38 @@ def test_segments_hoppar_over_brus():
         {"offsets": {"from": 4000, "to": 5000}, "text": " (musik spelas) "},
         {"offsets": {"from": 5000, "to": 6000}, "text": "Tentan är den tolfte."},
     ]}
-    segs = notat.segments(data, "Mötet")
+    segs = notat.segments(data, "Meeting")
     assert [s[3] for s in segs] == ["Hej och välkomna till föreläsningen.", "Tentan är den tolfte."], segs
-    assert segs[0][0] == 0.0 and segs[1][0] == 5.0, segs        # offset i ms -> sekunder
+    assert segs[0][0] == 0.0 and segs[1][0] == 5.0, segs        # offset in ms -> seconds
 
 
-def test_paragraphs_slar_ihop_samma_talare():
-    segs = [(0, 2, "Mötet", "Hej"), (2.5, 4, "Mötet", "allihop"), (10, 12, "Du", "Hej själv"),
-            (12.1, 13, "Du", "tack"), (14, 15, "Mötet", "Bra")]
+def test_paragraphs_join_same_speaker():
+    segs = [(0, 2, "Meeting", "Hej"), (2.5, 4, "Meeting", "allihop"), (10, 12, "You", "Hej själv"),
+            (12.1, 13, "You", "tack"), (14, 15, "Meeting", "Bra")]
     paras = notat.paragraphs(segs)
-    assert [p[2] for p in paras] == ["Mötet", "Du", "Mötet"], paras
-    assert paras[0][3] == "Hej allihop", paras          # < 3 s mellanrum -> samma stycke
+    assert [p[2] for p in paras] == ["Meeting", "You", "Meeting"], paras
+    assert paras[0][3] == "Hej allihop", paras          # < 3 s apart -> same paragraph
     assert paras[1][3] == "Hej själv tack", paras
     assert paras[2][3] == "Bra", paras
 
 
-def test_paragraphs_bryter_langa_stycken():
-    segs = [(i, i + 1, "Mötet", "x" * 250) for i in range(4)]
+def test_paragraphs_break_long_paragraphs():
+    segs = [(i, i + 1, "Meeting", "x" * 250) for i in range(4)]
     assert len(notat.paragraphs(segs, maxlen=400)) > 1
 
 
-def test_stycken_sorteras_efter_bada_sparen():
-    remote = [(5.0, 7.0, "Mötet", "fråga")]
-    mic = [(0.5, 3.0, "Du", "svar")]
-    assert [s[2] for s in sorted(remote + mic, key=lambda s: s[0])] == ["Du", "Mötet"]
+def test_paragraphs_sorted_by_both_tracks():
+    remote = [(5.0, 7.0, "Meeting", "fråga")]
+    mic = [(0.5, 3.0, "You", "svar")]
+    assert [s[2] for s in sorted(remote + mic, key=lambda s: s[0])] == ["You", "Meeting"]
 
 
 def test_mmss():
     assert notat.mmss(0) == "00:00" and notat.mmss(3661) == "61:01"
 
 
-def test_enheter_kraver_monitor_suffix():
-    # .monitor ska inte dubbleras, och ett uttryckligt NOTAT_SINK ska vinna
+def test_devices_require_monitor_suffix():
+    # .monitor must not be doubled, and an explicit NOTAT_SINK wins
     old = os.environ.copy()
     os.environ["NOTAT_SINK"] = "notat_test.monitor"
     os.environ["NOTAT_SOURCE"] = "mic"
@@ -68,8 +68,8 @@ def test_enheter_kraver_monitor_suffix():
         os.environ.update(old)
 
 
-def test_enheter_raknar_upp_alla_utgangar_och_ingangar():
-    """Utan NOTAT_SINK/NOTAT_SOURCE ska varje utgång och ingång fångas."""
+def test_devices_enumerate_all_outputs_and_inputs():
+    """Without NOTAT_SINK/NOTAT_SOURCE every output and every input must be captured."""
     old = os.environ.pop("NOTAT_SINK", None), os.environ.pop("NOTAT_SOURCE", None)
     try:
         tracks = notat.device_list()
@@ -78,25 +78,25 @@ def test_enheter_raknar_upp_alla_utgangar_och_ingangar():
             os.environ["NOTAT_SINK"] = old[0]
         if old[1] is not None:
             os.environ["NOTAT_SOURCE"] = old[1]
-    assert tracks, "inga enheter"
-    ut = [t for t in tracks if t[0] == "ut"]
+    assert tracks, "no devices"
+    out = [t for t in tracks if t[0] == "out"]
     in_ = [t for t in tracks if t[0] == "in"]
-    assert ut and in_, (ut, in_)
-    assert all(t[1].endswith(".monitor") for t in ut), ut     # utgång läses som monitor
-    assert not any(".monitor" in t[1] for t in in_), in_      # monitor är ingen mikrofon
-    assert all(t[2] in ("Mötet", "Du") for t in tracks), tracks
+    assert out and in_, (out, in_)
+    assert all(t[1].endswith(".monitor") for t in out), out    # an output is read as a monitor
+    assert not any(".monitor" in t[1] for t in in_), in_       # a monitor is not a microphone
+    assert all(t[2] in ("Meeting", "You") for t in tracks), tracks
 
 
-def test_chunks_delar_pa_styckegrans_utan_att_tappa_text():
-    text = "\n\n".join("x" * 900 for _ in range(20))      # ~18 000 tecken
-    delar = notat.chunks(text, size=16000)
-    assert len(delar) >= 2, len(delar)
-    assert "".join(delar).count("x") == text.count("x"), "text tappades i delningen"
+def test_chunks_split_on_paragraph_boundary_without_losing_text():
+    text = "\n\n".join("x" * 900 for _ in range(20))      # ~18 000 characters
+    parts = notat.chunks(text, size=16000)
+    assert len(parts) >= 2, len(parts)
+    assert "".join(parts).count("x") == text.count("x"), "text was lost in the split"
 
 
-def test_summarize_ger_fel_utan_att_kasta():
+def test_summarize_returns_error_without_throwing():
     old = os.environ.get("NOTAT_AI_ENDPOINT")
-    os.environ["NOTAT_AI_ENDPOINT"] = "http://127.0.0.1:1/v1"   # stängd port
+    os.environ["NOTAT_AI_ENDPOINT"] = "http://127.0.0.1:1/v1"   # closed port
     try:
         txt, err = notat.summarize("Hej. " * 50)
         assert txt is None and err, (txt, err)
@@ -106,246 +106,246 @@ def test_summarize_ger_fel_utan_att_kasta():
             os.environ["NOTAT_AI_ENDPOINT"] = old
 
 
-def test_ai_config_foljer_omascribe():
+def test_ai_config_follows_omascribe():
     endpoint, key, model = notat.ai_config()
     assert endpoint.startswith("http"), endpoint
-    assert model, "modell saknas"
+    assert model, "model missing"
 
 
-def _kuvert(mönster, förskjutning=0, skala=1.0):
-    """Testhjälp: kuvert i stil med envelope() - 20 ms per värde."""
-    svans = [0.0] * 60
-    return ([0.0] * förskjutning + [v * skala for v in mönster] + svans, 0.02)
+def _envelope(pattern, offset=0, scale=1.0):
+    """Test helper: an envelope in the style of envelope() - 20 ms per value."""
+    tail = [0.0] * 60
+    return ([0.0] * offset + [v * scale for v in pattern] + tail, 0.02)
 
 
-def _mönster(n=300):
+def _pattern(n=300):
     return [1000 * abs(__import__("math").sin(i / 7)) + (i % 13) for i in range(n)]
 
 
-def test_dedupe_slar_ihop_samma_ljud_fran_flera_enheter():
-    """Samma ljud på två enheter: behåll den starkaste, oavsett vad whisper skrev."""
-    m = _mönster()
-    envs = {1: _kuvert(m), 2: _kuvert(m, förskjutning=5, skala=0.3)}
-    p = [0.0, 5.0, "Mötet#1", "Vi börjar om den här kursen och det kommer inte att vara så."]
-    q = [0.0, 5.0, "Du#2", "Någonting i början av kursen att det inte kommer vara mer för läsning."]
-    r = [0.0, 5.0, "Du#3", "Helt annat ljud som ingen annan enhet hörde, om dagboken och systemet."]
-    envs[3] = _kuvert([500 * abs(__import__("math").cos(i / 3)) for i in range(300)])
-    kvar = notat.dedupe([p, q, r], envs)
-    assert len(kvar) == 2, kvar
-    assert kvar[0][2] == "Mötet#1", kvar          # den starkaste kopian vann
-    assert kvar[1][2] == "Du#3", kvar             # olikt ljud behålls
+def test_dedupe_merges_same_audio_from_several_devices():
+    """Same audio on two devices: keep the strongest, whatever whisper wrote."""
+    m = _pattern()
+    envs = {1: _envelope(m), 2: _envelope(m, offset=5, scale=0.3)}
+    p = [0.0, 5.0, "Meeting#1", "Vi börjar om den här kursen och det kommer inte att vara så."]
+    q = [0.0, 5.0, "You#2", "Någonting i början av kursen att det inte kommer vara mer för läsning."]
+    r = [0.0, 5.0, "You#3", "Helt annat ljud som ingen annan enhet hörde, om dagboken och systemet."]
+    envs[3] = _envelope([500 * abs(__import__("math").cos(i / 3)) for i in range(300)])
+    kept = notat.dedupe([p, q, r], envs)
+    assert len(kept) == 2, kept
+    assert kept[0][2] == "Meeting#1", kept          # the strongest copy won
+    assert kept[1][2] == "You#3", kept              # different audio is kept
 
 
-def test_dedupe_hittar_dubblett_aven_nar_styckesgranserna_skiljer():
-    """Styckesgränserna glider mellan enheter: whisper lade samma mening på 46-48 s i ena
-    spåret och 48-52 s i det andra (mätt i en riktig körning). Jämfördes bara den tid båda
-    *påstod* att de täckte gav det 0,57 och dubbletten gick igenom."""
-    m = _mönster(4000)
-    envs = {1: _kuvert(m), 2: _kuvert(m, skala=0.4)}
-    p = [46.0, 48.0, "Mötet#1", "Hem, men blir inte svårt att testa då."]
-    q = [48.0, 52.0, "Du#2", "Men blir inte svårt att testa då. Vi kanske ska köra händelser."]
-    kvar = notat.dedupe([p, q], envs)
-    assert len(kvar) == 1, kvar
-    assert kvar[0][2] == "Mötet#1", kvar          # starkaste kopian (1,0 mot 0,4) behålls
+def test_dedupe_finds_duplicate_even_when_paragraph_boundaries_differ():
+    """The paragraph boundaries slide between devices: whisper placed the same sentence at 46-48 s on one
+    track and 48-52 s on the other (measured in a real run). Comparing only the time both
+    *claimed* to cover gave 0.57 and the duplicate slipped through."""
+    m = _pattern(4000)
+    envs = {1: _envelope(m), 2: _envelope(m, scale=0.4)}
+    p = [46.0, 48.0, "Meeting#1", "Hem, men blir inte svårt att testa då."]
+    q = [48.0, 52.0, "You#2", "Men blir inte svårt att testa då. Vi kanske ska köra händelser."]
+    kept = notat.dedupe([p, q], envs)
+    assert len(kept) == 1, kept
+    assert kept[0][2] == "Meeting#1", kept          # the strongest copy (1.0 vs 0.4) is kept
 
 
-def test_dedupe_slar_inte_ihop_olika_tider_trots_samma_ljud():
-    """Fällan som dödade första försöket: när båda spåren bär samma ljud korrelerar *vilket*
-    gemensamt fönster som helst (mätt 0,99 även för stycken 20 s isär). Jämförelsefönstret
-    måste vara den ena enhetens eget, annars slås hela mötet ihop."""
-    m = _mönster(4000)
-    envs = {1: _kuvert(m), 2: _kuvert(m, skala=0.4)}
-    p = [10.0, 14.0, "Mötet#1", "Då tar jag gränssnittet och testerna."]
-    q = [30.0, 34.0, "Du#2", "Just det, en sak till om kravspecifikationen."]
-    kvar = notat.dedupe([p, q], envs)
-    assert len(kvar) == 2, kvar
+def test_dedupe_does_not_merge_different_times_despite_same_audio():
+    """The trap that killed the first attempt: when both tracks carry the same audio, *any*
+    common window correlates (measured 0.99 even for paragraphs 20 s apart). The comparison window
+    must be the one device's own, otherwise the whole meeting is merged."""
+    m = _pattern(4000)
+    envs = {1: _envelope(m), 2: _envelope(m, scale=0.4)}
+    p = [10.0, 14.0, "Meeting#1", "Då tar jag gränssnittet och testerna."]
+    q = [30.0, 34.0, "You#2", "Just det, en sak till om kravspecifikationen."]
+    kept = notat.dedupe([p, q], envs)
+    assert len(kept) == 2, kept
 
 
-def test_dedupe_ror_inte_olika_ljud_samtidigt():
-    """Två personer samtidigt på olika enheter ska båda vara kvar."""
-    envs = {1: _kuvert(_mönster()), 2: _kuvert([300 * ((i * 7) % 11) for i in range(300)])}
-    a = [0.0, 5.0, "Mötet#1", "Vi går vidare med händelsedriven arkitektur i stället för lager."]
-    b = [0.5, 4.0, "Du#2", "Kan vi använda samma databas för båda tjänsterna eller dela den?"]
+def test_dedupe_does_not_touch_different_audio_at_the_same_time():
+    """Two people at the same time on different devices must both stay."""
+    envs = {1: _envelope(_pattern()), 2: _envelope([300 * ((i * 7) % 11) for i in range(300)])}
+    a = [0.0, 5.0, "Meeting#1", "Vi går vidare med händelsedriven arkitektur i stället för lager."]
+    b = [0.5, 4.0, "You#2", "Kan vi använda samma databas för båda tjänsterna eller dela den?"]
     assert len(notat.dedupe([a, b], envs)) == 2
 
 
-def test_korr_hittar_forskjutningen():
-    m = _mönster()
+def test_korr_finds_the_offset():
+    m = _pattern()
     assert notat.korr(m, [0.0] * 5 + m[:295]) > 0.9
-    olika = [(i * 7919) % 1000 for i in range(300)]
-    assert notat.korr(m, olika) < 0.5, notat.korr(m, olika)
+    different = [(i * 7919) % 1000 for i in range(300)]
+    assert notat.korr(m, different) < 0.5, notat.korr(m, different)
     assert notat.korr([0.0] * 300, [0.0] * 300) == 0.0
 
 
-def test_eko_varningen_tander_bara_nar_utgangen_hors_i_micken():
-    m = _mönster()
-    envs = {1: _kuvert(m), 2: _kuvert(m, förskjutning=3, skala=0.5)}
-    spårtyp = {1: "ut", 2: "in"}
-    mic = [0.0, 5.0, "Du#2", "Det var väl med den andra kursen, det är det vi kör nu."]
-    ut = [0.0, 5.0, "Mötet#1", "Någonting i början av kursen att det inte kommer vara mer."]
-    träffar, antal = notat.eko_stycken([mic, ut], envs, spårtyp)
-    assert (träffar, antal) == (1, 1), (träffar, antal)
-    # olika ljud samtidigt: ingen varning, och stycket behålls
-    envs[2] = _kuvert([300 * ((i * 7) % 11) for i in range(300)])
-    assert notat.eko_stycken([mic, ut], envs, spårtyp) == (0, 1)
-    assert len(notat.dedupe([mic, ut], envs)) == 2
-    # diariseringen kan ha döpt om talaren - spårnumret avgör, inte namnet
-    omdöpt = [0.0, 5.0, "Deltagare 1#1", "Någonting i början av kursen."]
-    assert notat.eko_stycken([mic, omdöpt], envs, spårtyp) == (0, 1)
+def test_echo_warning_only_lights_up_when_the_output_is_heard_in_the_mic():
+    m = _pattern()
+    envs = {1: _envelope(m), 2: _envelope(m, offset=3, scale=0.5)}
+    track_kind = {1: "out", 2: "in"}
+    mic = [0.0, 5.0, "You#2", "Det var väl med den andra kursen, det är det vi kör nu."]
+    out = [0.0, 5.0, "Meeting#1", "Någonting i början av kursen att det inte kommer vara mer."]
+    hits, count = notat.echo_paragraphs([mic, out], envs, track_kind)
+    assert (hits, count) == (1, 1), (hits, count)
+    # different audio at the same time: no warning, and the paragraph is kept
+    envs[2] = _envelope([300 * ((i * 7) % 11) for i in range(300)])
+    assert notat.echo_paragraphs([mic, out], envs, track_kind) == (0, 1)
+    assert len(notat.dedupe([mic, out], envs)) == 2
+    # the diarisation may have renamed the speaker - the track number decides, not the name
+    renamed = [0.0, 5.0, "Speaker 1#1", "Någonting i början av kursen."]
+    assert notat.echo_paragraphs([mic, renamed], envs, track_kind) == (0, 1)
 
 
-def test_uteslutning_fran_config():
-    """Webkameramiken ska kunna stängas av i config - och finnas där utan config."""
-    def spår_med(cfg):
+def test_exclusion_from_config():
+    """The webcam mic must be possible to turn off in config - and be there without config."""
+    def tracks_with(cfg):
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
             json.dump(cfg, f)
             path = f.name
-        gammal, notat.CONFIG = notat.CONFIG, path
-        notat.UTESLUTNA.clear()
+        old, notat.CONFIG = notat.CONFIG, path
+        notat.EXCLUDED.clear()
         try:
-            return notat.device_list(), list(notat.UTESLUTNA)
+            return notat.device_list(), list(notat.EXCLUDED)
         finally:
-            notat.CONFIG = gammal
+            notat.CONFIG = old
             os.unlink(path)
 
-    med, uteslutna = spår_med({"uteslut": ["WCAM110BK"]})
-    assert not any("WCAM" in f"{t[1]} {t[3]}" for t in med), med
-    assert any("WCAM" in u for u in uteslutna), uteslutna
-    utan, _ = spår_med({"uteslut": []})
-    assert any("WCAM" in f"{t[1]} {t[3]}" for t in utan), utan     # annars vore provet tomt
+    picked, excluded = tracks_with({"exclude": ["WCAM110BK"]})
+    assert not any("WCAM" in f"{t[1]} {t[3]}" for t in picked), picked
+    assert any("WCAM" in u for u in excluded), excluded
+    without, _ = tracks_with({"exclude": []})
+    assert any("WCAM" in f"{t[1]} {t[3]}" for t in without), without     # otherwise the test would be empty
 
 
-def test_valj_slar_av_och_pa_en_enhet():
-    """Väljaren i baren skriver till config - och av/på måste gå att vända."""
+def test_select_turns_a_device_off_and_on():
+    """The bar's selector writes to config - and off/on must be reversible."""
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-        json.dump({"uteslut": ["provsink"]}, f)
+        json.dump({"exclude": ["testsink"]}, f)
         path = f.name
-    gammal, notat.CONFIG = notat.CONFIG, path
+    old, notat.CONFIG = notat.CONFIG, path
     try:
-        alla = notat.enheter_alla()
-        d = next((x for x in alla if "hdmi" in x["nod"]), None)
-        assert d is not None, "hittar ingen hdmi-enhet att prova med"
-        assert d["vald"] is True, d
+        every = notat.all_devices()
+        d = next((x for x in every if "hdmi" in x["node"]), None)
+        assert d is not None, "found no hdmi device to test with"
+        assert d["selected"] is True, d
 
-        assert notat.cmd_valj({"_": [d["nod"]]}) == 0          # slå av
-        d2 = next(x for x in notat.enheter_alla() if x["nod"] == d["nod"])
-        assert d2["vald"] is False, d2
-        assert not any(t[1] == d["nod"] for t in notat.device_list()), "utesluten enhet valdes ändå"
+        assert notat.cmd_select({"_": [d["node"]]}) == 0          # turn off
+        d2 = next(x for x in notat.all_devices() if x["node"] == d["node"])
+        assert d2["selected"] is False, d2
+        assert not any(t[1] == d["node"] for t in notat.device_list()), "excluded device was selected anyway"
 
-        assert notat.cmd_valj({"_": [d["nod"]]}) == 0          # slå på igen
-        d3 = next(x for x in notat.enheter_alla() if x["nod"] == d["nod"])
-        assert d3["vald"] is True, d3
-        assert any(t[1] == d["nod"] for t in notat.device_list())
+        assert notat.cmd_select({"_": [d["node"]]}) == 0          # turn on again
+        d3 = next(x for x in notat.all_devices() if x["node"] == d["node"])
+        assert d3["selected"] is True, d3
+        assert any(t[1] == d["node"] for t in notat.device_list())
 
-        assert notat.cmd_valj({"_": ["finns-inte"]}) == 1      # okänd enhet ska inte tysta skriva
-        assert notat.cmd_valj({"_": []}) == 0                  # notat valj alla
-        assert notat.notat_config().get("uteslut") == [], notat.notat_config()
+        assert notat.cmd_select({"_": ["does-not-exist"]}) == 1      # an unknown device must not write silently
+        assert notat.cmd_select({"_": []}) == 0                  # notat select all
+        assert notat.notat_config().get("exclude") == [], notat.notat_config()
     finally:
-        notat.CONFIG = gammal
+        notat.CONFIG = old
         os.unlink(path)
 
 
-def test_modellkatalog_val_och_nedladdning():
-    """Barens modellmeny: katalogen, valet, och vägran när filen inte finns."""
+def test_model_catalog_choice_and_download():
+    """The bar's model menu: the catalogue, the choice, and the refusal when the file is missing."""
     import shutil
     tmp = tempfile.mkdtemp()
-    rot = os.path.join(tmp, "modeller")
-    os.makedirs(os.path.join(rot, "kb-whisper-large"))
-    with open(os.path.join(rot, "kb-whisper-large", "ggml-model.bin"), "wb") as f:
+    root = os.path.join(tmp, "models")
+    os.makedirs(os.path.join(root, "kb-whisper-large"))
+    with open(os.path.join(root, "kb-whisper-large", "ggml-model.bin"), "wb") as f:
         f.write(b"x")
     cfgp = os.path.join(tmp, "config.json")
     with open(cfgp, "w", encoding="utf-8") as f:
         json.dump({}, f)
-    gammal_rot, gammal_cfg = notat.MODEL_ROOT, notat.CONFIG
-    notat.MODEL_ROOT, notat.CONFIG = rot, cfgp
+    old_root, old_cfg = notat.MODEL_ROOT, notat.CONFIG
+    notat.MODEL_ROOT, notat.CONFIG = root, cfgp
     try:
-        for m in notat.MODELLER:      # en trasig rad i katalogen = död nedladdningsknapp
+        for m in notat.MODELS:      # a broken row in the catalogue = a dead download button
             assert m["url"].startswith("https://") and m["url"].endswith(".bin"), m
-            assert m["fil"].endswith(".bin") and m["mb"] > 0 and m["namn"], m
-        kat = {m["id"]: m for m in notat.modell_katalog()}
-        assert kat["kb-whisper-large"]["finns"] is True, kat["kb-whisper-large"]
-        assert kat["kb-whisper-small"]["finns"] is False, kat["kb-whisper-small"]
+            assert m["file"].endswith(".bin") and m["mb"] > 0 and m["name"], m
+        cat = {m["id"]: m for m in notat.model_catalog()}
+        assert cat["kb-whisper-large"]["downloaded"] is True, cat["kb-whisper-large"]
+        assert cat["kb-whisper-small"]["downloaded"] is False, cat["kb-whisper-small"]
 
-        assert notat.cmd_modell({"_": ["kb-whisper-small"]}) == 1      # inte nedladdad
-        assert notat.notat_config().get("modell") in (None, ""), "valde en modell som saknas"
-        assert notat.cmd_modell({"_": ["finns-inte"]}) == 1            # okänt id
+        assert notat.cmd_model({"_": ["kb-whisper-small"]}) == 1      # not downloaded
+        assert notat.notat_config().get("model") in (None, ""), "selected a model that is missing"
+        assert notat.cmd_model({"_": ["does-not-exist"]}) == 1        # unknown id
 
-        assert notat.cmd_modell({"_": ["kb-whisper-large"]}) == 0
-        assert notat.notat_config()["modell"] == "kb-whisper-large"
-        assert notat.find_model() == os.path.join(rot, "kb-whisper-large", "ggml-model.bin")
-        assert kat["kb-whisper-large"]["sökväg"]
-        assert notat.modell_namn(notat.find_model()) == "kb-whisper-large"
+        assert notat.cmd_model({"_": ["kb-whisper-large"]}) == 0
+        assert notat.notat_config()["model"] == "kb-whisper-large"
+        assert notat.find_model() == os.path.join(root, "kb-whisper-large", "ggml-model.bin")
+        assert cat["kb-whisper-large"]["path"]
+        assert notat.model_name(notat.find_model()) == "kb-whisper-large"
 
-        assert notat.cmd_hamta({"_": ["kb-whisper-large"]}) == 0       # redan hemma
-        assert notat.cmd_hamta({"_": ["finns-inte"]}) == 1             # inget nätanrop
+        assert notat.cmd_download({"_": ["kb-whisper-large"]}) == 0       # already home
+        assert notat.cmd_download({"_": ["does-not-exist"]}) == 1         # no network call
     finally:
-        notat.MODEL_ROOT, notat.CONFIG = gammal_rot, gammal_cfg
+        notat.MODEL_ROOT, notat.CONFIG = old_root, old_cfg
         shutil.rmtree(tmp)
 
 
-def test_modellernas_url_ger_en_fil():
-    """Nätprov (NOTAT_NATVERK=1): varje nedladdningsknapp måste peka på en riktig fil."""
-    if os.environ.get("NOTAT_NATVERK") != "1":
+def test_model_urls_resolve_to_a_file():
+    """Network test (NOTAT_NETWORK=1): every download button must point at a real file."""
+    if os.environ.get("NOTAT_NETWORK") != "1":
         return
     import urllib.request
-    for m in notat.MODELLER:
+    for m in notat.MODELS:
         req = urllib.request.Request(m["url"], method="HEAD",
                                      headers={"User-Agent": "notat/1.0"})
         with urllib.request.urlopen(req, timeout=60) as r:
             mb = int(r.headers.get("Content-Length") or 0) >> 20
             assert r.status == 200 and mb > 100, f"{m['id']}: {r.status} {mb} MB"
-            assert abs(mb - m["mb"]) < max(200, m["mb"] * 0.3), f"{m['id']}: katalogen säger {m['mb']} MB, filen är {mb} MB"
+            assert abs(mb - m["mb"]) < max(200, m["mb"] * 0.3), f"{m['id']}: the catalogue says {m['mb']} MB, the file is {mb} MB"
 
 
-def test_talaretiketter_och_tilldelning():
-    """Diarisering -> etiketter: mest talför först, och mikrofonens spår blir 'Du'."""
-    turer = [(0, 10, "speaker_01"), (10, 14, "speaker_00"), (14, 40, "speaker_01")]
-    m = notat.diar_etiketter(turer)
-    assert m == {"speaker_01": "Deltagare 1", "speaker_00": "Deltagare 2"}, m
-    m2 = notat.diar_etiketter(turer, bas=2)          # två spår får inte samma nummer
-    assert m2["speaker_01"] == "Deltagare 3" and m2["speaker_00"] == "Deltagare 4", m2
-    m3 = notat.diar_etiketter(turer, dominant="Du")
-    assert m3["speaker_01"] == "Du" and m3["speaker_00"] == "Deltagare 1", m3
+def test_speaker_labels_and_assignment():
+    """Diarisation -> labels: the most talkative first, and the microphone's track becomes 'You'."""
+    turns = [(0, 10, "speaker_01"), (10, 14, "speaker_00"), (14, 40, "speaker_01")]
+    m = notat.diar_labels(turns)
+    assert m == {"speaker_01": "Speaker 1", "speaker_00": "Speaker 2"}, m
+    m2 = notat.diar_labels(turns, base=2)          # two tracks must not get the same number
+    assert m2["speaker_01"] == "Speaker 3" and m2["speaker_00"] == "Speaker 4", m2
+    m3 = notat.diar_labels(turns, dominant="You")
+    assert m3["speaker_01"] == "You" and m3["speaker_00"] == "Speaker 1", m3
 
-    assert notat.talare_vid(turer, m, 1.0, 9.0) == "Deltagare 1"      # störst överlapp vinner
-    assert notat.talare_vid(turer, m, 10.5, 13.0) == "Deltagare 2"
-    assert notat.talare_vid([(0, 1, "speaker_00")], m, 100.0, 104.0) is None   # ingen gissning
+    assert notat.speaker_at(turns, m, 1.0, 9.0) == "Speaker 1"      # the largest overlap wins
+    assert notat.speaker_at(turns, m, 10.5, 13.0) == "Speaker 2"
+    assert notat.speaker_at([(0, 1, "speaker_00")], m, 100.0, 104.0) is None   # no guessing
 
-    # märkningen sker per segment och spårnumret behålls - dubblett- och ekologiken
-    # hänger på numret, inte på talarens namn
-    segs = [(1.0, 9.0, "Mötet#1", "hej"), (10.5, 13.0, "Mötet#1", "där"),
-            (60.0, 64.0, "Mötet#1", "utanför diariseringen")]
-    ut = notat.märk_segment(segs, turer, m)
-    assert [s[2] for s in ut] == ["Deltagare 1#1", "Deltagare 2#1", "Mötet#1"], ut
-    assert ut[0][3] == "hej" and ut[0][0] == 1.0, ut[0]          # text och tider orörda
+    # the labelling happens per segment and the track number is kept - the duplicate and echo
+    # logic hangs on the number, not on the speaker's name
+    segs = [(1.0, 9.0, "Meeting#1", "hej"), (10.5, 13.0, "Meeting#1", "där"),
+            (60.0, 64.0, "Meeting#1", "utanför diariseringen")]
+    out = notat.label_segments(segs, turns, m)
+    assert [s[2] for s in out] == ["Speaker 1#1", "Speaker 2#1", "Meeting#1"], out
+    assert out[0][3] == "hej" and out[0][0] == 1.0, out[0]          # text and times untouched
 
 
-def test_roster_vaxeln_och_vagran():
-    """Röstväxeln skriver config, vägrar slås på utan modeller, och hämtar inte i onödan."""
+def test_voice_switch_and_refusal():
+    """The voice switch writes config, refuses to turn on without models, and does not fetch needlessly."""
     import shutil
     tmp = tempfile.mkdtemp()
     cfgp = os.path.join(tmp, "config.json")
     with open(cfgp, "w", encoding="utf-8") as f:
         json.dump({}, f)
-    gammal_cfg, gammal_filer = notat.CONFIG, notat.DIAR_FILER
+    old_cfg, old_files = notat.CONFIG, notat.DIAR_FILES
     notat.CONFIG = cfgp
     try:
-        notat.DIAR_FILER = [{"klar": os.path.join(tmp, "saknas"), "nm": "x", "mb": 1}]
-        assert notat.diar_finns() is False
-        assert notat.cmd_röster({"_": ["på"]}) == 1
-        assert notat.notat_config().get("röster") in (None, False), "slog på utan modeller"
-        assert notat.cmd_röster({"_": ["av"]}) == 0
-        assert notat.cmd_röster({"_": ["kanske"]}) == 1, "okänt läge ska vägras"
+        notat.DIAR_FILES = [{"ready": os.path.join(tmp, "missing"), "name": "x", "mb": 1}]
+        assert notat.diar_available() is False
+        assert notat.cmd_speakers({"_": ["on"]}) == 1
+        assert notat.notat_config().get("speakers") in (None, False), "turned on without models"
+        assert notat.cmd_speakers({"_": ["off"]}) == 0
+        assert notat.cmd_speakers({"_": ["maybe"]}) == 1, "an unknown mode must be refused"
 
-        klar = os.path.join(tmp, "modell"); open(klar, "w").close()
-        notat.DIAR_FILER = [{"klar": klar, "nm": "x", "mb": 1}]
-        assert notat.diar_finns() is True
-        assert notat.cmd_röster({"_": ["på"]}) == 0
-        assert notat.notat_config()["röster"] is True
-        assert notat.röster_på() is True
-        assert notat.cmd_diar_hamta({"_": []}) == 0, "ska inte ladda ner när allt finns"
+        ready = os.path.join(tmp, "model"); open(ready, "w").close()
+        notat.DIAR_FILES = [{"ready": ready, "name": "x", "mb": 1}]
+        assert notat.diar_available() is True
+        assert notat.cmd_speakers({"_": ["on"]}) == 0
+        assert notat.notat_config()["speakers"] is True
+        assert notat.speakers_enabled() is True
+        assert notat.cmd_diar_download({"_": []}) == 0, "must not download when everything is there"
     finally:
-        notat.CONFIG, notat.DIAR_FILER = gammal_cfg, gammal_filer
+        notat.CONFIG, notat.DIAR_FILES = old_cfg, old_files
         shutil.rmtree(tmp)
 
 
@@ -358,7 +358,7 @@ def test_status_reports_running_transcription():
     import contextlib
     import io
     import subprocess
-    gammal = (notat.STATE, notat.SESSION, notat.JOB)
+    old = (notat.STATE, notat.SESSION, notat.JOB)
     with tempfile.TemporaryDirectory() as d:
         notat.STATE = d
         notat.SESSION = os.path.join(d, "session.json")
@@ -387,153 +387,153 @@ def test_status_reports_running_transcription():
             notat.job_clear()
             assert status()["transcribing"] is False
         finally:
-            notat.STATE, notat.SESSION, notat.JOB = gammal
+            notat.STATE, notat.SESSION, notat.JOB = old
 
 
 def test_speaker_list_only_shows_voices_in_the_text():
     """The header must match the text: labels that vanished with the duplicates
     must not be listed as participants."""
-    paras = [(0, 1, "Du#5", "hej"), (1, 2, "Deltagare 1#2", "hallå"),
-             (2, 3, "Mötet#1", "hm"), (3, 4, "Deltagare 1#3", "igen")]
-    assert notat.talare_i_texten(paras) == ["Du", "Deltagare 1"], notat.talare_i_texten(paras)
-    assert notat.talare_i_texten([(0, 1, "Mötet#1", "bara mötet")]) == []
+    paras = [(0, 1, "You#5", "hej"), (1, 2, "Speaker 1#2", "hallå"),
+             (2, 3, "Meeting#1", "hm"), (3, 4, "Speaker 1#3", "igen")]
+    assert notat.speakers_in_text(paras) == ["You", "Speaker 1"], notat.speakers_in_text(paras)
+    assert notat.speakers_in_text([(0, 1, "Meeting#1", "bara mötet")]) == []
 
 
-def test_namn_pa_talarna_ror_inte_spar_numret():
-    """Ett namn byter bara etiketten: who#nr bär dubblett- och ekologiken."""
-    etiketter = {"speaker_01": "Deltagare 1", "speaker_00": "Deltagare 2"}
-    assert notat.byt_talarnamn(etiketter, None) == etiketter
-    bytt = notat.byt_talarnamn(etiketter, {"Deltagare 1": "Ada"})
-    assert bytt == {"speaker_01": "Ada", "speaker_00": "Deltagare 2"}, bytt
-    assert notat.byt_talarnamn(etiketter, {"1": "Ada"})["speaker_01"] == "Ada"   # '1=Ada' också
-    assert notat.byt_talarnamn(etiketter, {"Deltagare 9": "Ada"}) == etiketter, "fel nyckel rör inget"
-    assert notat.namn_par("1=Ada, Deltagare 2=Bo") == {"Deltagare 1": "Ada", "Deltagare 2": "Bo"}
-    assert notat.namn_par("strunt") == {} and notat.namn_par("1=") == {}
+def test_names_on_speakers_do_not_touch_the_track_number():
+    """A name only changes the label: who#nr carries the duplicate and echo logic."""
+    labels = {"speaker_01": "Speaker 1", "speaker_00": "Speaker 2"}
+    assert notat.rename_speakers(labels, None) == labels
+    renamed = notat.rename_speakers(labels, {"Speaker 1": "Ada"})
+    assert renamed == {"speaker_01": "Ada", "speaker_00": "Speaker 2"}, renamed
+    assert notat.rename_speakers(labels, {"1": "Ada"})["speaker_01"] == "Ada"   # '1=Ada' too
+    assert notat.rename_speakers(labels, {"Speaker 9": "Ada"}) == labels, "the wrong key changes nothing"
+    assert notat.name_pairs("1=Ada, Speaker 2=Bo") == {"Speaker 1": "Ada", "Speaker 2": "Bo"}
+    assert notat.name_pairs("junk") == {} and notat.name_pairs("1=") == {}
 
-    segs = [(1.0, 9.0, "Mötet#2", "hej")]
-    assert notat.märk_segment(segs, [(0, 10, "speaker_01")], bytt)[0][2] == "Ada#2"
+    segs = [(1.0, 9.0, "Meeting#2", "hej")]
+    assert notat.label_segments(segs, [(0, 10, "speaker_01")], renamed)[0][2] == "Ada#2"
 
 
-def test_mote_ger_titel_och_deltagare_i_dokumentet():
-    """notat möte -> session.json -> dokumentets rubrik. Utan ljud: spåren saknas med flit."""
+def test_meeting_gives_title_and_participants_in_the_document():
+    """notat meeting -> session.json -> the document's heading. Without audio: the tracks are deliberately missing."""
     import shutil
-    gammal = (notat.RAW_ROOT, notat.STATE, notat.SESSION, notat.JOB, notat.notify, notat.log)
+    old = (notat.RAW_ROOT, notat.STATE, notat.SESSION, notat.JOB, notat.notify, notat.log)
     d = tempfile.mkdtemp()
     raw = os.path.join(d, "raw", "2026-10-06 09-00")
     os.makedirs(raw)
-    spår = [{"file": "ut1.wav", "label": "Mötet", "desc": "högtalare", "node": "x.monitor", "pid": 0},
-            {"file": "in2.wav", "label": "Du", "desc": "mic", "node": "y", "pid": 0}]
+    tracks = [{"file": "out1.wav", "label": "Meeting", "desc": "speakers", "node": "x.monitor", "pid": 0},
+              {"file": "in2.wav", "label": "You", "desc": "mic", "node": "y", "pid": 0}]
     with open(os.path.join(raw, "session.json"), "w", encoding="utf-8") as f:
-        json.dump({"started": 1.0, "dir": raw, "pid": 0, "tracks": spår}, f)
+        json.dump({"started": 1.0, "dir": raw, "pid": 0, "tracks": tracks}, f)
     notat.RAW_ROOT = os.path.join(d, "raw")
     notat.STATE = os.path.join(d, "state")
     os.makedirs(notat.STATE)
     notat.SESSION = os.path.join(notat.STATE, "session.json")
     notat.JOB = os.path.join(notat.STATE, "transcription.json")
-    notat.notify = lambda *a, **k: None            # ingen notis på skrivbordet under provet
+    notat.notify = lambda *a, **k: None            # no desktop notification during the test
     notat.log = lambda *a, **k: None
-    gammalt_valv = os.environ.get("NOTAT_VAULT")
+    old_vault = os.environ.get("NOTAT_VAULT")
     try:
-        assert notat.cmd_möte({"_": ["Designgenomgång"], "deltagare": "Ada, Bo", "namn": "1=Ada"}) == 0
-        sparad = json.load(open(os.path.join(raw, "session.json"), encoding="utf-8"))
-        assert sparad["title"] == "Designgenomgång", sparad
-        assert sparad["participants"] == ["Ada", "Bo"], sparad
-        assert sparad["names"] == {"Deltagare 1": "Ada"}, sparad
-        assert sparad["tracks"] == spår, "spåren får inte röras"
-        assert not os.path.exists(os.path.join(raw, "session.json.del")), "tempfil kvar"
+        assert notat.cmd_meeting({"_": ["Design review"], "participants": "Ada, Bo", "names": "1=Ada"}) == 0
+        saved = json.load(open(os.path.join(raw, "session.json"), encoding="utf-8"))
+        assert saved["title"] == "Design review", saved
+        assert saved["participants"] == ["Ada", "Bo"], saved
+        assert saved["names"] == {"Speaker 1": "Ada"}, saved
+        assert saved["tracks"] == tracks, "the tracks must not be touched"
+        assert not os.path.exists(os.path.join(raw, "session.json.del")), "temp file left behind"
 
         try:
             notat.find_model()
         except SystemExit:
-            return                     # ingen whisper-modell -> dokumentet kan inte byggas här
-        os.environ["NOTAT_VAULT"] = os.path.join(d, "valv")
-        path = notat.transcribe_dir(raw, 10, sammanfatta=False)
+            return                     # no whisper model -> the document cannot be built here
+        os.environ["NOTAT_VAULT"] = os.path.join(d, "vault")
+        path = notat.transcribe_dir(raw, 10, summary=False)
         text = open(path, encoding="utf-8").read()
-        assert text.startswith("# Designgenomgång"), text[:200]
-        assert "**Deltagare:** Ada · Bo" in text, text[:400]
-        assert os.path.basename(path).startswith("Designgenomgång"), path
-        assert not os.path.exists(path + ".del"), "tempfil kvar efter dokumentskrivningen"
+        assert text.startswith("# Design review"), text[:200]
+        assert "**Participants:** Ada · Bo" in text, text[:400]
+        assert os.path.basename(path).startswith("Design review"), path
+        assert not os.path.exists(path + ".del"), "temp file left behind after the document write"
 
-        assert notat.cmd_möte({"_": [], "rensa": True}) == 0
+        assert notat.cmd_meeting({"_": [], "clear": True}) == 0
         assert "title" not in json.load(open(os.path.join(raw, "session.json"), encoding="utf-8"))
     finally:
-        if gammalt_valv is None:
+        if old_vault is None:
             os.environ.pop("NOTAT_VAULT", None)
         else:
-            os.environ["NOTAT_VAULT"] = gammalt_valv
-        notat.RAW_ROOT, notat.STATE, notat.SESSION, notat.JOB, notat.notify, notat.log = gammal
+            os.environ["NOTAT_VAULT"] = old_vault
+        notat.RAW_ROOT, notat.STATE, notat.SESSION, notat.JOB, notat.notify, notat.log = old
         shutil.rmtree(d)
 
 
-def test_röst_traffen_och_referensfilen():
-    """Röstregistret: rätt referens vinner, tvekan ger inget namn, och filen skrivs skyddat."""
+def test_voice_match_and_the_reference_file():
+    """The voice registry: the right reference wins, doubt gives no name, and the file is written protected."""
     import shutil
-    # två referenser (0-6 s = Ada, 7-13 s = Bo) och en okänd bit (14-20 s)
-    fönster = [(0.0, 6.0), (7.0, 13.0), (14.0, 20.0)]
+    # two references (0-6 s = Ada, 7-13 s = Bo) and one unknown bit (14-20 s)
+    windows = [(0.0, 6.0), (7.0, 13.0), (14.0, 20.0)]
     seg = [(0.0, 6.0, "speaker_00"), (7.0, 13.0, "speaker_01"), (14.0, 20.0, "speaker_00")]
-    assert notat.röst_träff(seg, fönster) == 0, "samma kluster som referens 0 -> Ada"
+    assert notat.voice_match(seg, windows) == 0, "same cluster as reference 0 -> Ada"
     seg[2] = (14.0, 20.0, "speaker_01")
-    assert notat.röst_träff(seg, fönster) == 1
+    assert notat.voice_match(seg, windows) == 1
     seg[2] = (14.0, 20.0, "speaker_02")
-    assert notat.röst_träff(seg, fönster) is None, "eget kluster -> ingen gissning"
-    assert notat.röst_träff([(0.0, 6.0, "speaker_00")], [(0.0, 6.0), (7.0, 13.0)]) is None
+    assert notat.voice_match(seg, windows) is None, "its own cluster -> no guessing"
+    assert notat.voice_match([(0.0, 6.0, "speaker_00")], [(0.0, 6.0), (7.0, 13.0)]) is None
 
     tmp = tempfile.mkdtemp()
-    gammal = notat.RÖST_ROOT
-    notat.RÖST_ROOT = os.path.join(tmp, "röster")
+    old = notat.VOICE_ROOT
+    notat.VOICE_ROOT = os.path.join(tmp, "voices")
     try:
         import math
         import wave
-        tyst = b"\x00\x00" * 16000 * 3
-        ton = b"".join(int(12000 * math.sin(2 * math.pi * 220 * i / 16000)).to_bytes(2, "little", signed=True)
-                       for i in range(16000 * 4))
-        med_tyst = os.path.join(tmp, "med_tyst.wav")
-        with wave.open(med_tyst, "wb") as w:
+        silence = b"\x00\x00" * 16000 * 3
+        tone = b"".join(int(12000 * math.sin(2 * math.pi * 220 * i / 16000)).to_bytes(2, "little", signed=True)
+                        for i in range(16000 * 4))
+        with_silence = os.path.join(tmp, "with_silence.wav")
+        with wave.open(with_silence, "wb") as w:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
-            w.writeframes(tyst + ton)
-        assert notat.spara_röst("Ada", med_tyst) is True
-        path = os.path.join(notat.RÖST_ROOT, "Ada.wav")
-        assert os.path.exists(path) and os.stat(path).st_mode & 0o777 == 0o600, "röstprofilen ska vara 0600"
-        a, b = notat.bästa_klipp(med_tyst, notat.envelope(med_tyst)[0])
-        assert a >= 2.5, f"tystnaden får inte bli röstprofilen (valde {a:.1f}s)"
-        assert notat.referenser() == [("Ada", path)], notat.referenser()
-        längd = os.path.getsize(path)
-        assert notat.spara_röst("Ada", med_tyst) is False, "kortare prov ska inte skriva över"
-        assert os.path.getsize(path) == längd
-        assert notat.cmd_glöm({"_": ["Ada"]}) == 0 and not os.path.exists(path)
-        assert notat.cmd_glöm({"_": ["Ada"]}) == 1, "borttagen röst ska säga till"
+            w.writeframes(silence + tone)
+        assert notat.save_voice("Ada", with_silence) is True
+        path = os.path.join(notat.VOICE_ROOT, "Ada.wav")
+        assert os.path.exists(path) and os.stat(path).st_mode & 0o777 == 0o600, "the voice profile must be 0600"
+        a, b = notat.best_clip(with_silence, notat.envelope(with_silence)[0])
+        assert a >= 2.5, f"the silence must not become the voice profile (chose {a:.1f}s)"
+        assert notat.references() == [("Ada", path)], notat.references()
+        length = os.path.getsize(path)
+        assert notat.save_voice("Ada", with_silence) is False, "a shorter sample must not overwrite"
+        assert os.path.getsize(path) == length
+        assert notat.cmd_forget({"_": ["Ada"]}) == 0 and not os.path.exists(path)
+        assert notat.cmd_forget({"_": ["Ada"]}) == 1, "a removed voice must say so"
     finally:
-        notat.RÖST_ROOT = gammal
+        notat.VOICE_ROOT = old
         shutil.rmtree(tmp)
 
 
-def test_sok_och_senaste_i_valvet():
-    """Sök och senaste mot ett tillfälligt valv - rg är verktyget, inget index behövs."""
+def test_search_and_latest_in_the_vault():
+    """Search and latest against a temporary vault - rg is the tool, no index needed."""
     import shutil
     if not shutil.which("rg"):
-        return                                # ripgrep saknas -> provet kan inte köras
-    gammal = notat.vault_root
+        return                                # ripgrep missing -> the test cannot run
+    old = notat.vault_root
     d = tempfile.mkdtemp()
     try:
-        os.makedirs(os.path.join(d, "Inspelningar"))
-        äldre = os.path.join(d, "Inspelningar", "Möte 2026-01-01 09-00.md")
-        nyare = os.path.join(d, "Inspelningar", "Möte 2026-02-02 09-00.md")
-        open(äldre, "w", encoding="utf-8").write("**[00:10] Ada:** mediator\n")
-        open(nyare, "w", encoding="utf-8").write("**[00:20] Bo:** annat\n")
-        os.utime(äldre, (1_000_000, 1_000_000))
+        os.makedirs(os.path.join(d, "Recordings"))
+        older = os.path.join(d, "Recordings", "Meeting 2026-01-01 09-00.md")
+        newer = os.path.join(d, "Recordings", "Meeting 2026-02-02 09-00.md")
+        open(older, "w", encoding="utf-8").write("**[00:10] Ada:** mediator\n")
+        open(newer, "w", encoding="utf-8").write("**[00:20] Bo:** annat\n")
+        os.utime(older, (1_000_000, 1_000_000))
         notat.vault_root = lambda: d
         import contextlib
         import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            assert notat.cmd_sök({"_": ["mediator"]}) == 0
-        assert "Ada" in buf.getvalue() and nyare not in buf.getvalue(), buf.getvalue()
+            assert notat.cmd_search({"_": ["mediator"]}) == 0
+        assert "Ada" in buf.getvalue() and newer not in buf.getvalue(), buf.getvalue()
         with contextlib.redirect_stdout(io.StringIO()):
-            assert notat.cmd_sök({"_": ["finns-inte-här"]}) == 1, "ingen träff ska säga till"
-        assert notat.senaste_dok() == nyare, "senaste = senast skriven"
-        assert notat.cmd_senaste({"_": []}) == 0
+            assert notat.cmd_search({"_": ["not-here"]}) == 1, "no hit must say so"
+        assert notat.latest_doc() == newer, "latest = most recently written"
+        assert notat.cmd_latest({"_": []}) == 0
     finally:
-        notat.vault_root = gammal
+        notat.vault_root = old
         shutil.rmtree(d)
 
 

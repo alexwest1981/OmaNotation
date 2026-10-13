@@ -28,7 +28,7 @@ if Omarchy is present:
 git clone https://github.com/alexwest1981/OmaNotation.git
 cd OmaNotation
 ./install.sh                       # command + VAD model + kb-whisper-small + bar widget
-./install.sh --ingen-modell        # if you already have a model
+./install.sh --no-model            # if you already have a model
 ```
 
 The plugin lives in the repository root (`manifest.json` + `BarWidget.qml`), the layout the
@@ -51,18 +51,18 @@ realtime on an RTX 3060 Ti, against roughly 1× on CPU.
 | `notat stop --wait` | wait for the document instead of handing the job off |
 | `notat status [--json]` | the state (the bar polls this) |
 | `notat devices` | devices, model and vault in use |
-| `notat valj <device>` | toggle a device on/off (`notat valj alla` = everything on) |
-| `notat modeller` | the models, which one is selected and which are downloaded |
-| `notat modell <id>` | switch model |
-| `notat hamta <id>` | download a model (one percentage per line) |
-| `notat röster på\|av` | separate the speakers in the document (Deltagare 1, 2 …) |
-| `notat diar-hamta` | download the speaker separation (~70 MB) |
+| `notat select <device>` | toggle a device on/off (`notat select all` = everything on) |
+| `notat models` | the models, which one is selected and which are downloaded |
+| `notat model <id>` | switch model |
+| `notat download <id>` | download a model (one percentage per line) |
+| `notat speakers on\|off` | separate the speakers in the document (Speaker 1, 2 …) |
+| `notat speakers fetch` | download the speaker separation (~70 MB) |
 | `notat transcribe <dir>` | redo an earlier recording (e.g. with a better model) |
-| `notat möte "Title"` | name the meeting and set participants (see below) |
-| `notat namn` | known voices: show, toggle, save a voice from a file |
-| `notat glöm <Name>` | delete a voice profile |
-| `notat sök <word>` | search the meeting documents (ripgrep over the vault) |
-| `notat senaste [--öppna]` | the path to the most recently written document |
+| `notat meeting "Title"` | name the meeting and set participants (see below) |
+| `notat voices` | known voices: show, toggle, save a voice from a file |
+| `notat forget <Name>` | delete a voice profile |
+| `notat search <word>` | search the meeting documents (ripgrep over the vault) |
+| `notat latest [--open]` | the path to the most recently written document |
 | `notat stop --no-summary` | skip the AI summary |
 
 ![A meeting room with the notes OmaNotation writes](meeting-notes.jpg)
@@ -105,7 +105,7 @@ through the room, the microphone's audio is not a copy of the output but a mix (
 meeting), and then the discussion appears twice. The document gets a warning about it, with
 numbers:
 
-> [!warning] Mötets ljud hördes i rummet (1 av 2 mikrofonstycken är samma ljud som utgången) …
+> [!warning] The meeting audio was heard in the room (1 of 2 microphone pieces is the same audio as the output) …
 
 Headphones (or echo cancellation in the meeting app) give clean text. Measured: microphone
 against output sits at 0.64–0.70 in correlation when the audio is heard in the room, while
@@ -116,9 +116,9 @@ devices.
 
 ## Models (measured, not guessed)
 
-The whisper models are picked in the bar menu or with `notat modell <id>`. The catalogue contains
+The whisper models are picked in the bar menu or with `notat model <id>`. The catalogue contains
 KBLab's Swedish-trained **KB-Whisper** and OpenAI's multilingual models. Measured on two Swedish
-samples with known text (272 and 342 words, `tools/jamfor.py`) on an RTX 3060 Ti:
+samples with known text (272 and 342 words, `tools/compare.py`) on an RTX 3060 Ti:
 
 | Model | Size | Sample 1 (119 s) | Sample 2 (143 s) | Speed |
 |---|---|---|---|---|
@@ -136,24 +136,24 @@ att varje lager kan testas för sig"), a quality risk the WER figure hides.
 If you measure yourself: whisper.cpp's `-nt` (no timestamps) merges the speech into a few lumps —
 measured 3 segments at 18–46 s for 110 s of speech, against 24 segments at 1–5 s with timestamps —
 and moves the WER figures by several percentage points. `notat` does not use the flag, and
-`tools/jamfor.py` does the same so the numbers can be compared.
+`tools/compare.py` does the same so the numbers can be compared.
 
-## Speakers: Deltagare 1, 2 …
+## Speakers: Speaker 1, 2 …
 
-Toggled in the bar menu (**Röster → Särskilj röster**) or with `notat röster på|av`. Your own
-microphone is always **Du**; the voices in the meeting audio get **Deltagare 1, 2 …** sorted by
+Toggled in the bar menu (**Voices → Separate voices**) or with `notat speakers on|off`. Your own
+microphone is always **You**; the voices in the meeting audio get **Speaker 1, 2 …** sorted by
 how much they talk (the one who talks most becomes 1). A paragraph that no measured turn covers
-keeps "Mötet" — honestly empty rather than guessed.
+keeps "Meeting" — honestly empty rather than guessed.
 
 The mechanism is **sherpa-onnx** (a static binary plus ONNX models, ~70 MB, no torch, no cloud
 service): pyannote segmentation and voice embeddings (NeMo TitaNet small). The speaker is set on
 every whisper segment *before* the paragraphs are merged — otherwise a paragraph can span several
-voices and the label becomes a guess. `notat diar-hamta` fetches the models (install.sh does it
+voices and the label becomes a guess. `notat speakers fetch` fetches the models (install.sh does it
 for you).
 
-- If you know how many people are in the meeting, set `"antal_talare": 3` in the config — it is
+- If you know how many people are in the meeting, set `"speaker_count": 3` in the config — it is
   more accurate than the automation. Otherwise the count is found with the threshold 0.8
-  (`NOTAT_DIAR_TRÖSKEL`); a sweep from 0.6 to 0.95 against a two-speaker sample with 16 known
+  (`NOTAT_DIAR_THRESHOLD`); a sweep from 0.6 to 0.95 against a two-speaker sample with 16 known
   turns gave 100 % correct turns for 0.7–0.95 and 88 % for 0.6 — the plateau is wide, and too low
   a threshold splits the voices instead of merging them.
 - **Measured:** on a sample of its own with two Swedish voices and 16 known turn changes, the
@@ -171,39 +171,39 @@ any readable format, and the accessibility bus (AT-SPI) is disabled by default. 
 does not guess — you write the names:
 
 ```bash
-notat möte "Systemarkitektur 3"            # the title becomes the document heading
-notat möte --deltagare "Ada, Bo"           # **Deltagare:** in the document
-notat möte --namn "1=Ada, 2=Bo"            # Deltagare 1/2 in the transcript become the names
-notat möte --rensa                         # clear title, participants and names
-notat möte --mapp <recording-dir>          # point at an older recording
+notat meeting "System Architecture 3"      # the title becomes the document heading
+notat meeting --participants "Ada, Bo"     # **Participants:** in the document
+notat meeting --names "1=Ada, 2=Bo"        # Speaker 1/2 in the transcript become the names
+notat meeting --clear                      # clear title, participants and names
+notat meeting --dir <recording-dir>        # point at an older recording
 ```
 
 With no arguments the command shows which meeting it refers to. Without a running recording that
 is the **latest** directory in `~/.local/share/notat/raw/`, and the answer says which one. The
 values are written into the recording's `session.json` — the same file the transcription reads —
-so the title and the participant list land in the document without extra steps. `--namn` applies
+so the title and the participant list land in the document without extra steps. `--names` applies
 to the transcription that is coming: set it while you are recording, or run
 `notat transcribe <dir>` again afterwards. A name only changes the label — the track number
-behind it (`who#nr`) carries the duplicate and echo logic, and `Du`/`Mötet` are never renamed.
+behind it (`who#nr`) carries the duplicate and echo logic, and `You`/`Meeting` are never renamed.
 
 ## Known voices: the name follows the voice
 
-`Deltagare 1` applies to one recording. If you want the name to follow the voice between
-meetings, name the speaker **once** — which you already do with `notat möte --namn "1=Ada"` — and
+`Speaker 1` applies to one recording. If you want the name to follow the voice between
+meetings, name the speaker **once** — which you already do with `notat meeting --names "1=Ada"` — and
 the voice is saved:
 
 ```bash
-notat möte --namn "1=Ada" --mapp <recording-dir>   # names + saves the voice
-notat transcribe <recording-dir>                   # the document is written with the name
-notat namn                                         # show the registry
-notat namn på|av                                   # toggle name matching
-notat namn Ada ~/voice-samples/ada.wav             # save a voice from a file (16 kHz mono)
-notat glöm Ada                                     # delete the voice profile
+notat meeting --names "1=Ada" --dir <recording-dir>   # names + saves the voice
+notat transcribe <recording-dir>                      # the document is written with the name
+notat voices                                          # show the registry
+notat voices on|off                                   # toggle name matching
+notat voices Ada ~/voice-samples/ada.wav              # save a voice from a file (16 kHz mono)
+notat forget Ada                                      # delete the voice profile
 ```
 
-The next recording where Ada talks gets the name by itself — marked `Ada (röst)` in the document,
-because it is a match and not a name you typed. If no known voice is found, `Deltagare N` stays:
-no guessing. `notat devices` shows the registry and whether matching is `på`.
+The next recording where Ada talks gets the name by itself — marked `Ada (voice)` in the document,
+because it is a match and not a name you typed. If no known voice is found, `Speaker N` stays:
+no guessing. `notat devices` shows the registry and whether matching is `on`.
 
 **The mechanism** is the sherpa binary that is already in `~/.local/share/notat/diar/` — no new
 model, nothing new to install, nothing sent anywhere. The reference voice and an unknown turn are
@@ -211,7 +211,7 @@ put in the same file with one second of silence between them; run the diarisatio
 the turn lands in the same cluster as the reference. Cost: ~1.4 s per unknown voice in a
 recording.
 
-**Measured on `diarprov/`** (16 turns, two synthetic voices):
+**Measured on `diar-sample/`** (16 turns, two synthetic voices):
 
 | Sample | Result |
 |---|---|
@@ -220,58 +220,59 @@ recording.
 
 The threshold is the dial, and the plateau is wide: below 0.5 the speaker splits into several
 clusters, above 0.9 the **reference voices** merge (measured: 14/14 at 1.0) and then everyone
-becomes the same person. `NOTAT_RÖST_TRÖSKEL` (default 0.7) sits in the middle of the plateau.
+becomes the same person. `NOTAT_VOICE_THRESHOLD` (default 0.7) sits in the middle of the plateau.
 Measured with a separate embedding chain (`onnxruntime` + `numpy`, the same TitaNet model): the
 same voice +0.87 in cosine against different +0.33 — but that needs a package that is not in the
 repository, so the path above was chosen.
 
 **The limit, honestly:** two synthetic voices in a clean recording. More voices, worse
 microphones, bleed and a voice that changes over time are not measured — that is why the name is
-marked `(röst)` in the document, why matching can be switched off, and why the voice profiles sit
-in `~/.local/share/notat/röster/` with mode 0600 (directory 0700) and are deleted with
-`notat glöm`.
+marked `(voice)` in the document, why matching can be switched off, and why the voice profiles sit
+in `~/.local/share/notat/voices/` with mode 0600 (directory 0700) and are deleted with
+`notat forget`.
 
 ## Where things end up
 
-- **Documents:** `<vault>/Inspelningar/Möte YYYY-MM-DD HH-MM.md` (a title set with `notat möte`
-  becomes the file name instead). The vault is `valv` in `~/.config/notat/config.json`, otherwise
+- **Documents:** `<vault>/Recordings/Meeting YYYY-MM-DD HH-MM.md` (a title set with `notat meeting`
+  becomes the file name instead). The vault is `vault` in `~/.config/notat/config.json`, otherwise
   `vault_root` from `~/.config/omascribe/config.json`, otherwise `~/Documents/OmaScribe Vault`,
-  otherwise `~/Documents/Anteckningar`.
-  Shape: `## Sammanfattning` (bullets plus Beslut/Uppgifter/Nyckelbegrepp), `## Transkription`
-  with speakers (`Mötet` = the audio output, `Du` = the microphone, `Deltagare 1, 2 …` when the
-  voice switch is on) in time order, and `## Egna anteckningar`.
+  otherwise `~/Documents/Notes`. An install that already has the old Swedish `Inspelningar/`
+  folder keeps using it — the documents are never moved behind your back.
+  Shape: `## Summary` (bullets plus Decisions/Tasks/Key terms), `## Transcript`
+  with speakers (`Meeting` = the audio output, `You` = the microphone, `Speaker 1, 2 …` when the
+  voice switch is on) in time order, and `## My notes`.
   The transcript is written first and the summary is added on top — if the AI service is down you
   never lose the transcript, only the summary (you get a notification).
 - **Raw audio:** `~/.local/share/notat/raw/<timestamp>/*.wav` (16 kHz mono). Kept on purpose —
   `notat transcribe <dir>` can redo them.
 - **Models:** `~/.local/share/notat/models/<id>/`.
 - **Speaker separation:** `~/.local/share/notat/diar/` (the sherpa-onnx binary and the ONNX
-  models, ~70 MB; `notat diar-hamta` fetches them).
+  models, ~70 MB; `notat speakers fetch` fetches them).
 - **Log:** `~/.local/share/notat/notat.log` (who called what).
 
 ## Settings — `~/.config/notat/config.json`
 
 ```json
 {
-  "uteslut": ["WCAM110BK"],
-  "modell": "kb-whisper-small",
-  "röster": true,
-  "antal_talare": 0,
-  "valv": "~/Documents/Anteckningar"
+  "exclude": ["WCAM110BK"],
+  "model": "kb-whisper-small",
+  "speakers": true,
+  "speaker_count": 0,
+  "vault": "~/Documents/Notes"
 }
 ```
 
-- `uteslut`: devices that must not be recorded (name or description *containing* the pattern,
-  case-insensitive). `notat devices` lists them under `uteslutna`, so what was left out is
+- `exclude`: devices that must not be recorded (name or description *containing* the pattern,
+  case-insensitive). `notat devices` lists them under `excluded`, so what was left out is
   visible instead of disappearing silently. The menu writes here.
-- `modell`: the selected model (set by the menu).
-- `röster`: separate the speakers in the document (the menu toggles it).
-- `antal_talare`: 0 = find the count automatically; set the number if you know it.
-- `valv`: where the documents go.
+- `model`: the selected model (set by the menu).
+- `speakers`: separate the speakers in the document (the menu toggles it).
+- `speaker_count`: 0 = find the count automatically; set the number if you know it.
+- `vault`: where the documents go.
 
 Environment variables: `NOTAT_MODEL` (path or id), `NOTAT_MODEL_DIR`, `NOTAT_LANG` (default
-`auto`), `NOTAT_SINK`, `NOTAT_SOURCE`, `NOTAT_VAULT` (overrides `valv`, handy for test runs),
-`NOTAT_DIAR_TRÖSKEL` (clustering threshold, default 0.8).
+`auto`), `NOTAT_SINK`, `NOTAT_SOURCE`, `NOTAT_VAULT` (overrides `vault`, handy for test runs),
+`NOTAT_DIAR_THRESHOLD` (clustering threshold, default 0.8).
 
 ## VAD is not optional
 
@@ -283,20 +284,20 @@ too. `install.sh` fetches `ggml-silero-v5.1.2.bin` (885 kB).
 
 ```bash
 python3 test_notat.py              # pure logic: segments, paragraphs, audio duplicates, devices, model choice, speaker labels, title/participants, voices, search (28/28)
-NOTAT_NATVERK=1 python3 test_notat.py   # + that every download URL returns a real file
+NOTAT_NETWORK=1 python3 test_notat.py   # + that every download URL returns a real file
 bash tools/e2e.sh                  # end to end through a virtual sink (no audio in the room)
-python3 tools/jamfor.py tools/facit.wav tools/facit.txt kb-whisper-small   # WER against known text
-python3 tools/diarprov.py          # speaker separation against a synthetic two-speaker sample (16 turns)
-python3 tools/spar.py              # per track: level and what whisper heard (troubleshooting)
+python3 tools/compare.py tools/reference.wav tools/reference.txt kb-whisper-small   # WER against known text
+python3 tools/diar-sample.py       # speaker separation against a synthetic two-speaker sample (16 turns)
+python3 tools/probe.py             # per track: level and what whisper heard (troubleshooting)
 ```
 
-`tools/facit.wav` is not included (it is an audio file) — build it yourself from the reference
+`tools/reference.wav` is not included (it is an audio file) — build it yourself from the reference
 text with any Swedish voice:
 
 ```bash
 pip install edge-tts
-edge-tts --voice sv-SE-SofieNeural --file tools/facit.txt --write-media /tmp/f.mp3
-ffmpeg -i /tmp/f.mp3 -ac 1 -ar 16000 tools/facit.wav
+edge-tts --voice sv-SE-SofieNeural --file tools/reference.txt --write-media /tmp/f.mp3
+ffmpeg -i /tmp/f.mp3 -ac 1 -ar 16000 tools/reference.wav
 ```
 
 ## Troubleshooting
@@ -306,8 +307,8 @@ ffmpeg -i /tmp/f.mp3 -ac 1 -ar 16000 tools/facit.wav
 | The document warns that the meeting audio was heard in the room | you are playing through loudspeakers — use headphones |
 | The text appears twice | same as above; several microphones pick up the same voice |
 | Invented text in the pauses | the VAD model is missing from `~/.local/share/notat/models/` |
-| "hittar ingen whisper-modell" | pick/download one in the bar menu, or `notat hamta kb-whisper-small` |
-| No text at all, the recording is silent | wrong device selected in the menu — `python3 tools/spar.py <dir>` shows dB per track |
+| "no whisper model found" | pick/download one in the bar menu, or `notat download kb-whisper-small` |
+| No text at all, the recording is silent | wrong device selected in the menu — `python3 tools/probe.py <dir>` shows dB per track |
 | The bar button is not visible | `omarchy plugin enable io.github.alexwest1981.omanotation`, then `omarchy-restart-shell` |
 | No document after the stop | `notat status --json` says whether the job is alive; the child's output is in `~/.local/share/notat/raw/<dir>/transcription.log`. Rerun with `notat transcribe "<dir>"` |
 
@@ -319,7 +320,7 @@ rm ~/.local/bin/notat                                      # the command
 rm -rf ~/.config/notat ~/.local/share/notat                # config, models, voice profiles, raw audio
 ```
 
-The documents stay in the vault (delete them there when you like) — `notat senaste` shows the
+The documents stay in the vault (delete them there when you like) — `notat latest` shows the
 path. The `~/.local/share/notat` line also removes the raw recordings (`raw/`), the downloaded
 models and the voice profiles; none of it lives outside those two directories.
 

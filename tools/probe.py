@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Per spår: enhet, nivå och vad whisper hittade. Diagnos, inte gissning.
+"""Per track: device, level and what whisper found. Diagnosis, not guessing.
 
-  python3 tools/spar.py [mapp]     (utan mapp: den senaste inspelningen)
+  python3 tools/probe.py [dir]     (without dir: the latest recording)
 """
 import json
 import os
@@ -9,19 +9,19 @@ import re
 import subprocess
 import sys
 
-RAWROT = os.path.join(os.path.expanduser("~"), ".local/share/notat/raw")
+RAW_ROOT = os.path.join(os.path.expanduser("~"), ".local/share/notat/raw")
 
 
-def senaste():
-    if not os.path.isdir(RAWROT):
+def latest():
+    if not os.path.isdir(RAW_ROOT):
         return ""
-    mappar = [os.path.join(RAWROT, d) for d in os.listdir(RAWROT)]
-    return max(mappar, key=os.path.getmtime) if mappar else ""
+    folders = [os.path.join(RAW_ROOT, d) for d in os.listdir(RAW_ROOT)]
+    return max(folders, key=os.path.getmtime) if folders else ""
 
 
-RAW = sys.argv[1] if len(sys.argv) > 1 else senaste()
+RAW = sys.argv[1] if len(sys.argv) > 1 else latest()
 if not RAW or not os.path.isdir(RAW):
-    sys.exit(f"användning: {sys.argv[0]} <mapp med session.json>   (inga inspelningar i {RAWROT})")
+    sys.exit(f"usage: {sys.argv[0]} <dir with session.json>   (no recordings in {RAW_ROOT})")
 meta = json.load(open(os.path.join(RAW, "session.json"), encoding="utf-8"))
 
 

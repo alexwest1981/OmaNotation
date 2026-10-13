@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""notat - spelar in båda ljudsidorna av ett möte/föreläsning och gör ett dokument av det.
+"""notat - records both audio sides of a meeting/lecture and turns it into a document.
 
-  notat            startar om inget spelas in, stoppar + transkriberar annars
-  notat start      starta inspelning
-  notat stop       stoppa, transkribera, skriv dokument (transkriberingen går i
-                   bakgrunden; --wait väntar på dokumentet i stället)
-  notat status     --json för baren
-  notat valj <nod> slå av/på en enhet (notat valj alla = allt på)
-  notat modeller   visa modellerna och vilken som är vald
-  notat modell <id>      välj modell (måste vara nedladdad)
-  notat hamta <id>       ladda ner en modell (procent per rad)
-  notat röster på|av     skilj talare åt i dokumentet (Deltagare 1, 2 ...)
-  notat diar-hamta       ladda ner talaruppdelningen (~70 MB)
-  notat transcribe <mapp>   transkribera en tidigare inspelning igen
-  notat möte "Titel"        namnge mötet: --deltagare "A,B", --namn "1=A" (se nedan)
-  notat namn [<Namn> <wav>] kända röster: visa, slå på/av, spara en röst från en fil
-  notat glöm <Namn>         radera en röstprofil
-  notat sök <ord>           sök i mötesdokumenten (rg mot valvet)
-  notat senaste [--öppna]   sökvägen till senaste dokumentet
-  notat devices    visa vilka enheter som används (och vilka som valts bort)
+  notat            starts if nothing is recording, otherwise stops + transcribes
+  notat start      start recording
+  notat stop       stop, transcribe, write the document (the transcription runs in
+                   the background; --wait waits for the document instead)
+  notat status     --json for the bar
+  notat select <node>  turn a device off/on (notat select all = everything on)
+  notat models     show the models and which one is selected
+  notat model <id>       choose model (must be downloaded)
+  notat download <id>    download a model (percent per line)
+  notat speakers on|off  tell speakers apart in the document (Speaker 1, 2 ...)
+  notat speakers fetch   download the speaker separation (~70 MB)
+  notat transcribe <dir>   transcribe an earlier recording again
+  notat meeting "Title"    name the meeting: --participants "A,B", --names "1=A" (see below)
+  notat voices [<Name> <wav>] known voices: show, turn on/off, save a voice from a file
+  notat forget <Name>       delete a voice profile
+  notat search <word>       search the meeting documents (rg against the vault)
+  notat latest [--open]     the path to the latest document
+  notat devices    show which devices are used (and which have been opted out)
 """
 import bisect
 import json
@@ -46,109 +46,114 @@ MODEL_DIRS = [
     MODEL_ROOT,
     os.path.join(HOME, "Work/novacut/models"),
 ]
-FOLDERS = ["small", "base", "tiny"]          # reserv om inget val gjorts i baren
+FOLDERS = ["small", "base", "tiny"]          # fallback if nothing was chosen in the bar
 
-# Modellkatalogen: vad baren erbjuder. 'fil' letas i MODEL_ROOT/<id>/ för nedladdade
-# modeller, annars i MODEL_DIRS (whisper.cpp:s egna namn) för de som redan finns.
-MODELLER = [
-    {"id": "kb-whisper-large", "namn": "KB-Whisper large (svenska)", "fil": "ggml-model.bin",
-     "mb": 3100, "beskrivning": "Bäst på svenska. Långsammast.",
+# The model catalogue: what the bar offers. 'file' is looked up in MODEL_ROOT/<id>/ for
+# downloaded models, otherwise in MODEL_DIRS (whisper.cpp's own names) for the ones already there.
+MODELS = [
+    {"id": "kb-whisper-large", "name": "KB-Whisper large (Swedish)", "file": "ggml-model.bin",
+     "mb": 3100, "description": "Best for Swedish. Slowest.",
      "url": "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model.bin"},
-    {"id": "kb-whisper-large-q5", "namn": "KB-Whisper large q5 (svenska)", "fil": "ggml-model-q5_0.bin",
-     "mb": 1100, "beskrivning": "Nästan lika bra, tredjedelen så stor.",
+    {"id": "kb-whisper-large-q5", "name": "KB-Whisper large q5 (Swedish)", "file": "ggml-model-q5_0.bin",
+     "mb": 1100, "description": "Almost as good, a third of the size.",
      "url": "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model-q5_0.bin"},
-    {"id": "kb-whisper-medium", "namn": "KB-Whisper medium (svenska)", "fil": "ggml-model.bin",
-     "mb": 1500, "beskrivning": "Mellanklass på svenska.",
+    {"id": "kb-whisper-medium", "name": "KB-Whisper medium (Swedish)", "file": "ggml-model.bin",
+     "mb": 1500, "description": "Mid-range for Swedish.",
      "url": "https://huggingface.co/KBLab/kb-whisper-medium/resolve/main/ggml-model.bin"},
-    {"id": "kb-whisper-small", "namn": "KB-Whisper small (svenska)", "fil": "ggml-model.bin",
-     "mb": 466, "beskrivning": "Snabb, ändå bättre än OpenAI small på svenska.",
+    {"id": "kb-whisper-small", "name": "KB-Whisper small (Swedish)", "file": "ggml-model.bin",
+     "mb": 466, "description": "Fast, yet better than OpenAI small for Swedish.",
      "url": "https://huggingface.co/KBLab/kb-whisper-small/resolve/main/ggml-model.bin"},
-    {"id": "openai-small", "namn": "OpenAI small (flerspråkig)", "fil": "ggml-small.bin",
-     "mb": 466, "beskrivning": "Standardmodellen som ligger i systemet.",
+    {"id": "openai-small", "name": "OpenAI small (multilingual)", "file": "ggml-small.bin",
+     "mb": 466, "description": "The standard model that is in the system.",
      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"},
-    {"id": "openai-large-v3-turbo", "namn": "OpenAI large-v3-turbo (flerspråkig)", "fil": "ggml-large-v3-turbo.bin",
-     "mb": 1600, "beskrivning": "Snabb stor modell för engelska möten.",
+    {"id": "openai-large-v3-turbo", "name": "OpenAI large-v3-turbo (multilingual)", "file": "ggml-large-v3-turbo.bin",
+     "mb": 1600, "description": "Fast large model for English meetings.",
      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"},
 ]
 VAD_NAMES = ["ggml-silero-v5.1.2.bin", "ggml-silero-v5.0.0.bin"]
 
-# Talaruppdelning (diarisering) med sherpa-onnx: statiskt C++-binär + ONNX-modeller,
-# ingen torch och ingen gated modell. Mätt på eget prov (2 svenska röster, 16 kända
-# turer): NeMo TitaNet small gav 100 % rätt med känt antal talare, medan
-# auto-klustringens standardtröskel (0,5) sprack till 4-10 talare. Tröskeln styr
-# antalet: högre = färre talare.
+# Speaker separation (diarisation) with sherpa-onnx: a static C++ binary + ONNX models,
+# no torch and no gated model. Measured on our own sample (2 Swedish voices, 16 known
+# turns): NeMo TitaNet small got 100 % right with a known speaker count, while
+# auto-clustering's default threshold (0.5) broke into 4-10 speakers. The threshold governs
+# the count: higher = fewer speakers.
 DIAR_ROOT = os.path.join(HOME, ".local/share/notat/diar")
 DIAR_BIN = os.path.join(DIAR_ROOT, "sherpa/bin/sherpa-onnx-offline-speaker-diarization")
 DIAR_SEG = os.path.join(DIAR_ROOT, "seg/model.onnx")
 DIAR_EMB = os.path.join(DIAR_ROOT, "emb/nemo_en_titanet_small.onnx")
-DIAR_TRÖSKEL = float(os.environ.get("NOTAT_DIAR_TRÖSKEL", "0.8"))
-DIAR_FILER = [
-    {"nm": "sherpa-onnx", "mb": 23, "tar": True, "mål": os.path.join(DIAR_ROOT, "sherpa"),
+# The threshold env vars were Swedish until 1.1.1: read the old name as a fallback so a
+# shell profile or unit file that sets it keeps working. Same for VOICE_THRESHOLD further down.
+DIAR_THRESHOLD = float(os.environ.get("NOTAT_DIAR_THRESHOLD")
+                       or os.environ.get("NOTAT_DIAR_TRÖSKEL") or "0.8")
+DIAR_FILES = [
+    {"name": "sherpa-onnx", "mb": 23, "tar": True, "dest": os.path.join(DIAR_ROOT, "sherpa"),
      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/"
             "sherpa-onnx-v1.13.8-linux-x64-shared-no-tts.tar.bz2"},
-    {"nm": "talarsegmentering (pyannote)", "mb": 6, "tar": True, "mål": os.path.join(DIAR_ROOT, "seg"),
+    {"name": "speaker segmentation (pyannote)", "mb": 6, "tar": True, "dest": os.path.join(DIAR_ROOT, "seg"),
      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/"
             "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"},
-    {"nm": "röst-embedding (NeMo TitaNet small)", "mb": 40, "tar": False, "mål": DIAR_EMB,
+    {"name": "voice embedding (NeMo TitaNet small)", "mb": 40, "tar": False, "dest": DIAR_EMB,
      "url": "https://huggingface.co/csukuangfj/speaker-embedding-models/resolve/main/"
             "nemo_en_titanet_small.onnx"},
 ]
-for _f in DIAR_FILER:               # vad som måste finnas för att diariseringen ska funka
-    _f["klar"] = DIAR_BIN if _f["mål"].endswith("sherpa") else (
-        DIAR_SEG if _f["mål"].endswith("seg") else DIAR_EMB)
+for _f in DIAR_FILES:               # what must exist for the diarisation to work
+    _f["ready"] = DIAR_BIN if _f["dest"].endswith("sherpa") else (
+        DIAR_SEG if _f["dest"].endswith("seg") else DIAR_EMB)
 
-# Röstregister: en wav per känd röst. Namnger man en talare (notat möte --namn "1=Ada")
-# sparas rösten här, och nästa möte får namnet av sig själv. Röst är biometri: katalogen
-# är 0700 och filerna 0600, `notat glöm <namn>` tar bort dem.
-RÖST_ROOT = os.path.join(HOME, ".local/share/notat/röster")
-RÖST_KLIPP = 8.0                    # sekunder ljud per referens och per jämförelse
-RÖST_MIN = 2.0                      # kortare tur än så duger inte som röstprov
-RÖST_TRÖSKEL = os.environ.get("NOTAT_RÖST_TRÖSKEL", "0.7")   # sherpas klustertröskel
+# Voice registry: one wav per known voice. If you name a speaker (notat meeting --names "1=Ada")
+# the voice is saved here, and the next meeting gets the name by itself. A voice is biometrics:
+# the directory is 0700 and the files are 0600, `notat forget <name>` deletes them.
+VOICE_ROOT = os.path.join(HOME, ".local/share/notat/voices")
+VOICE_CLIP = 8.0                    # seconds of audio per reference and per comparison
+VOICE_MIN = 2.0                      # a turn shorter than that is no good as a voice sample
+VOICE_THRESHOLD = (os.environ.get("NOTAT_VOICE_THRESHOLD")
+                   or os.environ.get("NOTAT_RÖST_TRÖSKEL") or "0.7")   # sherpa's cluster threshold
 LANG = os.environ.get("NOTAT_LANG", "auto")
 OMASCRIBE_CFG = os.path.join(HOME, ".config/omascribe/config.json")
 VAULT_FALLBACK = os.path.join(HOME, "Documents/OmaScribe Vault")
-VAULT_FOLDER = "Inspelningar"
+VAULT_FOLDER = "Recordings"
+VAULT_FOLDER_OLD = "Inspelningar"   # what it was called before the English names
 
 
-# ------------------------------------------------------------------ hjälpare
+# ------------------------------------------------------------------ helpers
 
 def sh(*args, **kw):
     return subprocess.run(args, capture_output=True, text=True, **kw)
 
 
-def modell_sökväg(mid):
-    """Var ligger modellen? Nedladdade ligger i MODEL_ROOT/<id>/, systemets i MODEL_DIRS."""
-    m = next((x for x in MODELLER if x["id"] == mid), None)
+def model_path(mid):
+    """Where is the model? Downloaded ones are in MODEL_ROOT/<id>/, the system's in MODEL_DIRS."""
+    m = next((x for x in MODELS if x["id"] == mid), None)
     if not m:
         return None
-    p = os.path.join(MODEL_ROOT, mid, m["fil"])
+    p = os.path.join(MODEL_ROOT, mid, m["file"])
     if os.path.exists(p):
         return p
     for d in MODEL_DIRS:
-        if d and os.path.exists(os.path.join(d, m["fil"])):
-            return os.path.join(d, m["fil"])
+        if d and os.path.exists(os.path.join(d, m["file"])):
+            return os.path.join(d, m["file"])
     return None
 
 
-def modell_katalog():
-    vald = notat_config().get("modell") or ""
-    return [{**m, "finns": bool(modell_sökväg(m["id"])), "vald": m["id"] == vald,
-             "sökväg": modell_sökväg(m["id"])} for m in MODELLER]
+def model_catalog():
+    selected = notat_config().get("model") or ""
+    return [{**m, "downloaded": bool(model_path(m["id"])), "selected": m["id"] == selected,
+             "path": model_path(m["id"])} for m in MODELS]
 
 
 def find_model():
-    """Vald modell ur config (barens meny), annars NOTAT_MODEL, annars standardordningen."""
-    for nyckel, värde in (("config", notat_config().get("modell")),
-                          ("NOTAT_MODEL", os.environ.get("NOTAT_MODEL"))):
-        if not värde:
+    """The selected model from config (the bar's menu), otherwise NOTAT_MODEL, otherwise the default order."""
+    for key, value in (("config", notat_config().get("model")),
+                       ("NOTAT_MODEL", os.environ.get("NOTAT_MODEL"))):
+        if not value:
             continue
-        if os.path.exists(värde):
-            return värde
-        p = modell_sökväg(värde)
+        if os.path.exists(value):
+            return value
+        p = model_path(value)
         if p:
             return p
-        sys.exit(f"notat: modellen '{värde}' ({nyckel}) finns inte nedladdad - "
-                 f"öppna källmenyn i baren eller kör: notat hamta {värde}")
+        sys.exit(f"notat: model '{value}' ({key}) is not downloaded - "
+                 f"open the source menu in the bar or run: notat download {value}")
     for d in MODEL_DIRS:
         if not d:
             continue
@@ -156,91 +161,93 @@ def find_model():
             p = os.path.join(d, f"ggml-{name}.bin")
             if os.path.exists(p):
                 return p
-    sys.exit("notat: hittar ingen whisper-modell (sätt NOTAT_MODEL eller ladda ner en i baren)")
+    sys.exit("notat: no whisper model found (set NOTAT_MODEL or download one in the bar)")
 
 
-def ladda_ner(url, tmp, min_mb=1):
-    """Strömmar en fil till tmp och skriver {"procent": N} per rad (barens mätare läser dem)."""
+def download_file(url, tmp, min_mb=1):
+    """Streams a file to tmp and writes {"percent": N} per line (the bar's meter reads them)."""
     req = urllib.request.Request(url, headers={"User-Agent": "notat/1.0"})
     with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
-        klart, nästa = 0, 0
+        got, nxt = 0, 0
         while True:
-            bit = r.read(1 << 20)
-            if not bit:
+            chunk = r.read(1 << 20)
+            if not chunk:
                 break
-            f.write(bit)
-            klart += len(bit)
-            p = int(klart * 100 / total) if total else 0
-            if p >= nästa:
-                print(json.dumps({"procent": p, "mb": klart >> 20}), flush=True)
-                nästa = p + 5
+            f.write(chunk)
+            got += len(chunk)
+            p = int(got * 100 / total) if total else 0
+            if p >= nxt:
+                print(json.dumps({"percent": p, "mb": got >> 20}), flush=True)
+                nxt = p + 5
     if os.path.getsize(tmp) < min_mb * 1_000_000:
-        raise ValueError("filen är för liten - nedladdningen gick fel")
+        raise ValueError("the file is too small - the download went wrong")
 
 
-def röster_på():
+def speakers_enabled():
     cfg = notat_config()
-    return bool(cfg.get("röster"))
+    return bool(cfg.get("speakers"))
 
 
-def diar_finns():
-    return all(os.path.exists(f["klar"]) for f in DIAR_FILER)
+def diar_available():
+    return all(os.path.exists(f["ready"]) for f in DIAR_FILES)
 
 
-def cmd_diar_hamta(_args):
-    """Hämtar sherpa-onnx + segmentering + embedding (~70 MB) för talaruppdelningen."""
+def cmd_diar_download(_args):
+    """Fetches sherpa-onnx + segmentation + embedding (~70 MB) for the speaker separation."""
     import tarfile
     os.makedirs(DIAR_ROOT, exist_ok=True)
     try:
-        for f in DIAR_FILER:
-            if os.path.exists(f["klar"]):
-                print(json.dumps({"ok": True, "redan": True, "vad": f["nm"]}, ensure_ascii=False))
+        for f in DIAR_FILES:
+            if os.path.exists(f["ready"]):
+                print(json.dumps({"ok": True, "already": True, "what": f["name"]}, ensure_ascii=False))
                 continue
             if f["tar"]:
                 tmp = os.path.join(DIAR_ROOT, os.path.basename(f["url"]))
-                ladda_ner(f["url"], tmp, min_mb=5)
-                ut = tmp + ".ut"
-                os.makedirs(ut, exist_ok=True)
+                download_file(f["url"], tmp, min_mb=5)
+                out = tmp + ".out"
+                os.makedirs(out, exist_ok=True)
                 with tarfile.open(tmp, "r:bz2") as t:
                     try:
-                        t.extractall(ut, filter="data")
+                        t.extractall(out, filter="data")
                     except TypeError:                 # python < 3.12
-                        t.extractall(ut)
-                inre = os.path.join(ut, os.listdir(ut)[0])   # paketet har en toppkatalog
-                shutil.copytree(inre, f["mål"], dirs_exist_ok=True)
-                shutil.rmtree(ut, ignore_errors=True)
+                        t.extractall(out)
+                inner = os.path.join(out, os.listdir(out)[0])   # the package has a top directory
+                shutil.copytree(inner, f["dest"], dirs_exist_ok=True)
+                shutil.rmtree(out, ignore_errors=True)
                 os.unlink(tmp)
                 if os.path.exists(DIAR_BIN):
                     os.chmod(DIAR_BIN, 0o755)
             else:
-                os.makedirs(os.path.dirname(f["mål"]), exist_ok=True)
-                ladda_ner(f["url"], f["mål"] + ".del", min_mb=5)
-                os.replace(f["mål"] + ".del", f["mål"])
-            print(json.dumps({"ok": True, "vad": f["nm"], "färdig": diar_finns()}, ensure_ascii=False))
+                os.makedirs(os.path.dirname(f["dest"]), exist_ok=True)
+                download_file(f["url"], f["dest"] + ".del", min_mb=5)
+                os.replace(f["dest"] + ".del", f["dest"])
+            print(json.dumps({"ok": True, "what": f["name"], "done": diar_available()}, ensure_ascii=False))
     except Exception as e:
-        log(f"diar-hamta misslyckades: {e}")
+        log(f"speakers fetch failed: {e}")
         print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
         return 1
-    log("diar-hamta klar")
-    print(json.dumps({"ok": True, "sökväg": DIAR_ROOT, "talare": True}, ensure_ascii=False))
+    log("speakers fetch done")
+    print(json.dumps({"ok": True, "path": DIAR_ROOT, "speakers": True}, ensure_ascii=False))
     return 0
 
 
-def cmd_röster(args):
-    """notat röster på|av - skilj talare åt i dokumentet som Deltagare 1, 2 ..."""
+def cmd_speakers(args):
+    """notat speakers on|off|fetch - tell speakers apart in the document as Speaker 1, 2 ..."""
     val = (args["_"][0] if args["_"] else "").lower()
-    if val not in ("på", "av", "ja", "nej", "true", "false", "on", "off"):
-        print(json.dumps({"ok": False, "error": "använd: notat röster på|av"}, ensure_ascii=False))
+    if val == "fetch":
+        return cmd_diar_download(args)
+    if val not in ("on", "off", "true", "false"):
+        print(json.dumps({"ok": False, "error": "usage: notat speakers on|off"}, ensure_ascii=False))
         return 1
-    på = val in ("på", "ja", "true", "on")
-    if på and not diar_finns():
-        print(json.dumps({"ok": False, "saknas": True,
-                          "error": "talaruppdelningen är inte nedladdad (kör: notat diar-hamta)"},
+    enabled = val in ("on", "true")
+    if enabled and not diar_available():
+        print(json.dumps({"ok": False, "missing": True,
+                          "error": "the speaker separation is not downloaded (run: notat speakers fetch)"},
                          ensure_ascii=False))
         return 1
     cfg = notat_config()
-    cfg["röster"] = på
+    cfg["speakers"] = enabled
     try:
         os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
         with open(CONFIG, "w", encoding="utf-8") as f:
@@ -248,112 +255,112 @@ def cmd_röster(args):
     except OSError as e:
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
         return 1
-    log(f"röster {val}")
-    print(json.dumps({"ok": True, "röster": på, "antal_talare": cfg.get("antal_talare") or 0},
+    log(f"speakers {val}")
+    print(json.dumps({"ok": True, "speakers_enabled": enabled, "speaker_count": cfg.get("speaker_count") or 0},
                      ensure_ascii=False))
     return 0
 
 
-def diar_turer(wav, antal_talare=0, tröskel=None):
-    """Talarturer ur en wav: ([(start, slut, 'speaker_00')], fel)."""
-    if not diar_finns():
-        return None, "talaruppdelningen är inte nedladdad (kör: notat diar-hamta)"
+def diar_turns(wav, speaker_count=0, threshold=None):
+    """Speaker turns from a wav: ([(start, end, 'speaker_00')], error)."""
+    if not diar_available():
+        return None, "the speaker separation is not downloaded (run: notat speakers fetch)"
     args = [DIAR_BIN, "--segmentation.pyannote-model=" + DIAR_SEG, "--embedding.model=" + DIAR_EMB]
-    if antal_talare:
-        args.append(f"--clustering.num-clusters={antal_talare}")
+    if speaker_count:
+        args.append(f"--clustering.num-clusters={speaker_count}")
     else:
-        args.append(f"--clustering.cluster-threshold={tröskel or DIAR_TRÖSKEL}")
-    miljö = dict(os.environ)
+        args.append(f"--clustering.cluster-threshold={threshold or DIAR_THRESHOLD}")
+    env = dict(os.environ)
     lib = os.path.join(DIAR_ROOT, "sherpa/lib")
     if os.path.isdir(lib):
-        miljö["LD_LIBRARY_PATH"] = lib + ":" + miljö.get("LD_LIBRARY_PATH", "")
-    r = sh(*args, wav, env=miljö)
-    ut = []
-    for rad in (r.stdout or "").splitlines():
-        m = re.match(r"\s*([\d.]+)\s*--\s*([\d.]+)\s+(speaker_\d+)", rad)
+        env["LD_LIBRARY_PATH"] = lib + ":" + env.get("LD_LIBRARY_PATH", "")
+    r = sh(*args, wav, env=env)
+    out = []
+    for line in (r.stdout or "").splitlines():
+        m = re.match(r"\s*([\d.]+)\s*--\s*([\d.]+)\s+(speaker_\d+)", line)
         if m:
-            ut.append((float(m.group(1)), float(m.group(2)), m.group(3)))
-    if not ut:
-        return None, (r.stderr or r.stdout or "diariseringen gav inga turer").strip()[-300:]
-    return ut, None
+            out.append((float(m.group(1)), float(m.group(2)), m.group(3)))
+    if not out:
+        return None, (r.stderr or r.stdout or "the diarisation gave no turns").strip()[-300:]
+    return out, None
 
 
-def diar_etiketter(turer, dominant=None, bas=0):
-    """Diariseringens talare -> läsbara etiketter, sorterade efter taltid.
+def diar_labels(turns, dominant=None, base=0):
+    """The diarisation's speakers -> readable labels, sorted by talk time.
 
-    Den som pratar mest först (läraren/mötessledaren blir 'Deltagare 1'), och på
-    mikrofonens spår får den mest talföre etiketten 'Du'. 'bas' skjuter numreringen så
-    att talare från olika spår inte krockar.
+    Whoever talks the most first (the teacher/meeting chair becomes 'Speaker 1'), and on
+    the microphone's track the most talkative one gets the label 'You'. 'base' shifts the numbering so
+    that speakers from different tracks do not collide.
     """
-    tid = {}
-    for t in turer:
-        tid[t[2]] = tid.get(t[2], 0.0) + (t[1] - t[0])
-    ut, n = {}, 1
-    for i, talare in enumerate(sorted(tid, key=lambda s: -tid[s])):
+    talk = {}
+    for t in turns:
+        talk[t[2]] = talk.get(t[2], 0.0) + (t[1] - t[0])
+    out, n = {}, 1
+    for i, speaker in enumerate(sorted(talk, key=lambda s: -talk[s])):
         if i == 0 and dominant:
-            ut[talare] = dominant
+            out[speaker] = dominant
         else:
-            ut[talare] = f"Deltagare {bas + n}"
+            out[speaker] = f"Speaker {base + n}"
             n += 1
-    return ut
+    return out
 
 
-def byt_talarnamn(etiketter, namn):
-    """'Deltagare 1' -> the name the user gave ('1=Ada' and 'Deltagare 1=Ada' both work).
+def rename_speakers(labels, names):
+    """'Speaker 1' -> the name the user gave ('1=Ada' and 'Speaker 1=Ada' both work).
 
     Only the display label changes. The track number in who#nr is what the duplicate
-    and echo logic hangs on, and 'Du'/'Mötet' are never renamed.
+    and echo logic hangs on, and 'You'/'Meeting' are never renamed.
     """
-    if not namn:
-        return etiketter
-    return {spk: namn.get(lbl) or namn.get(lbl.split(" ")[-1]) or lbl
-            for spk, lbl in etiketter.items()}
+    if not names:
+        return labels
+    return {spk: names.get(lbl) or names.get(lbl.split(" ")[-1]) or lbl
+            for spk, lbl in labels.items()}
 
 
-def talare_vid(turer, etiketter, start, slut):
-    """Etiketten för det diariseringssegment som täcker mest av stycket (annars None)."""
-    bästa, täckning = None, 0.0
-    for t in turer:
-        o = min(slut, t[1]) - max(start, t[0])
-        if o > täckning:
-            bästa, täckning = t[2], o
-    if bästa is None or täckning < 0.3 * max(0.1, slut - start):
+def speaker_at(turns, labels, start, end):
+    """The label of the diarisation segment that covers the most of the paragraph (otherwise None)."""
+    best, cover = None, 0.0
+    for t in turns:
+        ov = min(end, t[1]) - max(start, t[0])
+        if ov > cover:
+            best, cover = t[2], ov
+    if best is None or cover < 0.3 * max(0.1, end - start):
         return None
-    return etiketter.get(bästa)
+    return labels.get(best)
 
 
-def märk_segment(segs, turer, etiketter):
-    """Sätter talaretikett på varje whisper-segment och behåller spårnumret i etiketten.
+def label_segments(segs, turns, labels):
+    """Puts a speaker label on each whisper segment and keeps the track number in the label.
 
-    Måste ske FÖRE paragraphs(): slås styckena ihop först kan ett stycke spänna flera
-    talare, och då blir tilldelningen en gissning i stället för en mätning.
+    Must happen BEFORE paragraphs(): if the paragraphs are merged first, one paragraph can span
+    several speakers, and the assignment then becomes a guess instead of a measurement.
     """
-    ut = []
-    for start, slut, who, text in segs:
-        talare = talare_vid(turer, etiketter, start, slut)
+    out = []
+    for start, end, who, text in segs:
+        speaker = speaker_at(turns, labels, start, end)
         nr = who.split("#")[1] if "#" in who else ""
-        ut.append((start, slut, f"{talare or who.split('#')[0]}#{nr}", text))
-    return ut
+        out.append((start, end, f"{speaker or who.split('#')[0]}#{nr}", text))
+    return out
 
 
-# ------------------------------------------------------------------ röstregistret
+# ------------------------------------------------------------------ the voice registry
 #
-# Kan vi känna igen en röst mellan möten? Ja, med sherpa-binären som redan ligger i
-# diar/ - ingen ny modell, inget nytt att installera. Mätt på diarprov (16 turer, två
-# röster): lägg referensrösten och en okänd tur i samma fil med en sekunds tystnad
-# emellan, kör diariseringen, och se om turen hamnar i samma kluster som referensen.
-# Samma röst gav 1 kluster, olika röster 2 (mätt 4/4 isolerat, se README). Tröskelsvep
-# mot 14 okända turer: 14/14 för 0,6-0,8, 13/14 vid sherpas 0,5, och vid 0,9 börjar
-# referensrösterna slås ihop.
+# Can we recognize a voice between meetings? Yes, with the sherpa binary that already lies in
+# diar/ - no new model, nothing new to install. Measured on the diar sample (16 turns, two
+# voices): put the reference voice and an unknown turn in the same file with one second of silence
+# between them, run the diarisation, and see if the turn lands in the same cluster as the reference.
+# The same voice gave 1 cluster, different voices 2 (measured 4/4 isolated, see README). A threshold sweep
+# against 14 unknown turns: 14/14 for 0.6-0.8, 13/14 at sherpa's 0.5, and at 0.9 the
+# reference voices start to merge.
 #
-# ponytail: svaret är ja/nej/ingen-aning, inte en likhetssiffra - tröskeln
-# (NOTAT_RÖST_TRÖSKEL, standard 0.7) är ratten. Vill man ha siffror i stället går det
-# att räkna embeddingen själv med onnxruntime (mätt 14/14, samma röst +0,87 mot olika
-# +0,33), men det kräver ett paket som inte finns i repot. Testat på två syntetiska
-# röster i ett rum; fler röster, sämre mikrofoner och överhörning är inte mätt.
+# ponytail: the answer is yes/no/no-idea, not a similarity figure - the threshold
+# (NOTAT_VOICE_THRESHOLD, default 0.7) is the knob. If you want figures instead you can
+# compute the embedding yourself with onnxruntime (measured 14/14, same voice +0.87 against different
+# +0.33), but that requires a package that is not in the repo. Tested on two synthetic
+# voices in one room; more voices, worse microphones and crosstalk are not measured.
 
-def wav_läs(path, start=0.0, slut=None):
-    """(rate, bytes) för ett intervall ur en 16-bitars mono-wav, annars (None, None)."""
+def wav_read(path, start=0.0, end=None):
+    """(rate, bytes) for an interval from a 16-bit mono wav, otherwise (None, None)."""
     import wave
     try:
         with wave.open(path, "rb") as w:
@@ -361,114 +368,114 @@ def wav_läs(path, start=0.0, slut=None):
                 return None, None
             rate = w.getframerate()
             w.setpos(max(0, int(start * rate)))
-            n = int((slut - start) * rate) if slut else w.getnframes() - w.tell()
+            n = int((end - start) * rate) if end else w.getnframes() - w.tell()
             return rate, w.readframes(max(0, n))
     except (wave.Error, OSError, EOFError):
         return None, None
 
 
-def wav_skriv(path, rate, bitar, tystnad=1.0):
-    """Skriver bitarna som EN wav med tystnad emellan (diariseringen behöver gränsen).
+def wav_write(path, rate, pieces, silence=1.0):
+    """Writes the pieces as ONE wav with silence between them (the diarisation needs the boundary).
 
-    Temp + rename, som dokumentet: en halvskriven referens ska inte kunna läsas in
-    och bli en felmatchning.
+    Temp + rename, like the document: a half-written reference must not be readable
+    and become a mismatch.
     """
     import wave
-    tyst = b"\x00\x00" * int(rate * tystnad)
+    silent = b"\x00\x00" * int(rate * silence)
     with wave.open(path + ".del", "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(rate)
-        for i, bit in enumerate(bitar):
+        for i, chunk in enumerate(pieces):
             if i:
-                w.writeframes(tyst)
-            w.writeframes(bit)
+                w.writeframes(silent)
+            w.writeframes(chunk)
     os.replace(path + ".del", path)
 
 
-def bästa_klipp(wav, env=None, hop=0.02, start=None, slut=None):
-    """(start, slut) för den mest högljudda RÖST_KLIPP-sekunden i intervallet.
+def best_clip(wav, env=None, hop=0.02, start=None, end=None):
+    """(start, end) for the loudest VOICE_CLIP seconds in the interval.
 
-    Använder kuvertet transkriberingen ändå räknar ut, så det inte blir tystnad
-    eller en hostning som blir någons röstprofil. Utan kuvert: ta början av filen.
+    Uses the envelope the transcription computes anyway, so it does not become silence
+    or a cough that becomes someone's voice profile. Without an envelope: take the start of the file.
     """
     start = start or 0.0
     if not env:
-        rate, data = wav_läs(wav)
-        längd = len(data) / 2 / rate if rate else 0.0
-        return start, min(slut or längd, start + RÖST_KLIPP)
+        rate, data = wav_read(wav)
+        length = len(data) / 2 / rate if rate else 0.0
+        return start, min(end or length, start + VOICE_CLIP)
     i = int(start / hop)
-    ände = slut or len(env) * hop
-    j = min(len(env), int(ände / hop))
+    stop = end or len(env) * hop
+    j = min(len(env), int(stop / hop))
     if j - i < 3:
-        return start, ände
-    # fönstret ska kunna glida: högst halva sträckan, minst RÖST_MIN sekunder
-    längd = min(RÖST_KLIPP, max(RÖST_MIN, (ände - start) / 2))
-    fönster = max(1, int(längd / hop))
-    bästa, värde = i, -1.0
-    for k in range(i, max(i + 1, j - fönster + 1)):
-        m = sum(env[k:k + fönster]) / fönster
-        if m > värde:
-            bästa, värde = k, m
-    return bästa * hop, min(bästa * hop + längd, ände)
+        return start, stop
+    # the window should be able to slide: at most half the distance, at least VOICE_MIN seconds
+    length = min(VOICE_CLIP, max(VOICE_MIN, (stop - start) / 2))
+    window = max(1, int(length / hop))
+    best, value = i, -1.0
+    for k in range(i, max(i + 1, j - window + 1)):
+        m = sum(env[k:k + window]) / window
+        if m > value:
+            best, value = k, m
+    return best * hop, min(best * hop + length, stop)
 
 
-def namn_på():
-    """Automatisk namnigenkänning: 'namn' i config, annars på när registret inte är tomt."""
+def names_enabled():
+    """Automatic name recognition: 'names' in config, otherwise on when the registry is not empty."""
     cfg = notat_config()
-    if "namn" in cfg:
-        return bool(cfg["namn"])
-    return bool(referenser())
+    if "names" in cfg:
+        return bool(cfg["names"])
+    return bool(references())
 
 
-def referenser():
-    """[(namn, wav)] för kända röster."""
+def references():
+    """[(name, wav)] for known voices."""
     try:
-        filer = sorted(f for f in os.listdir(RÖST_ROOT) if f.endswith(".wav"))
+        files = sorted(f for f in os.listdir(VOICE_ROOT) if f.endswith(".wav"))
     except OSError:
         return []
-    return [(os.path.splitext(f)[0], os.path.join(RÖST_ROOT, f)) for f in filer]
+    return [(os.path.splitext(f)[0], os.path.join(VOICE_ROOT, f)) for f in files]
 
 
-def etikett_för(seg, a, b):
-    """Talaretiketten med störst överlapp med [a, b]."""
-    träffar = [(min(b, y) - max(a, x), c) for x, y, c in seg if min(b, y) > max(a, x)]
-    return max(träffar)[1] if träffar else None
+def label_for(seg, a, b):
+    """The speaker label with the largest overlap with [a, b]."""
+    hits = [(min(b, y) - max(a, x), c) for x, y, c in seg if min(b, y) > max(a, x)]
+    return max(hits)[1] if hits else None
 
 
-def röst_träff(seg, fönster):
-    """Index för den referens den sista biten hör ihop med. None om ingen - eller flera.
+def voice_match(seg, windows):
+    """Index of the reference the last piece belongs with. None if none - or several.
 
-    Ren logik utan ljud: fönster är tidsfönstren i den ihopsatta filen, sista biten är
-    den okända rösten. Hör den ihop med exakt en referens är det ett svar, annars ingen
-    gissning. Testas i test_notat.py.
+    Pure logic without audio: windows are the time windows in the joined file, the last piece is
+    the unknown voice. If it belongs with exactly one reference it is an answer, otherwise no
+    guess. Tested in test_notat.py.
     """
-    klipp = etikett_för(seg, *fönster[-1])
-    if not klipp:
+    clip = label_for(seg, *windows[-1])
+    if not clip:
         return None
-    träffar = [i for i, fön in enumerate(fönster[:-1]) if etikett_för(seg, *fön) == klipp]
-    return träffar[0] if len(träffar) == 1 else None
+    hits = [i for i, win in enumerate(windows[:-1]) if label_for(seg, *win) == clip]
+    return hits[0] if len(hits) == 1 else None
 
 
-def känd_röst(klipp_wav, refs):
-    """Vilken av de kända rösterna är det här? None om ingen - eller flera - stämmer."""
-    giltiga, bitar, tider = [], [], []
-    for namn, path in refs:
-        rate, data = wav_läs(path, 0, RÖST_KLIPP)
+def known_voice(clip_wav, refs):
+    """Which of the known voices is this? None if none - or several - match."""
+    valid, pieces, times = [], [], []
+    for name, path in refs:
+        rate, data = wav_read(path, 0, VOICE_CLIP)
         if not rate or not data:
             continue
-        giltiga.append(namn)
-        bitar.append(data)
-        tider.append((rate, len(data) / 2 / rate))
-    rate, data = wav_läs(klipp_wav)
-    if not rate or not data or not giltiga:
+        valid.append(name)
+        pieces.append(data)
+        times.append((rate, len(data) / 2 / rate))
+    rate, data = wav_read(clip_wav)
+    if not rate or not data or not valid:
         return None
-    bitar.append(data)
-    tider.append((rate, len(data) / 2 / rate))
-    tmp = klipp_wav + ".jamfor.wav"
-    wav_skriv(tmp, rate, bitar, tystnad=1.0)
+    pieces.append(data)
+    times.append((rate, len(data) / 2 / rate))
+    tmp = clip_wav + ".compare.wav"
+    wav_write(tmp, rate, pieces, silence=1.0)
     try:
-        seg = diar_turer(tmp, 0, RÖST_TRÖSKEL)[0]
+        seg = diar_turns(tmp, 0, VOICE_THRESHOLD)[0]
     finally:
         try:
             os.unlink(tmp)
@@ -476,99 +483,99 @@ def känd_röst(klipp_wav, refs):
             pass
     if not seg:
         return None
-    start, fönster = 0.0, []
-    for _r, längd in tider:
-        fönster.append((start, start + längd))
-        start += längd + 1.0
-    i = röst_träff(seg, fönster)
-    return giltiga[i] if i is not None else None
+    start, windows = 0.0, []
+    for _rate, length in times:
+        windows.append((start, start + length))
+        start += length + 1.0
+    i = voice_match(seg, windows)
+    return valid[i] if i is not None else None
 
 
-def kända_röster(wav, turer, etiketter, env=None):
-    """Namn på de kluster vars röst finns i registret - de som inte redan fått ett namn."""
-    refs = referenser()
+def known_voices(wav, turns, labels, env=None):
+    """Names of the clusters whose voice is in the registry - those that have not already been given a name."""
+    refs = references()
     if not refs:
         return {}
-    ut = {}
-    for spk, label in etiketter.items():
-        if not label.startswith("Deltagare"):       # Du/Mötet och manuellt namngivna rörs inte
+    out = {}
+    for spk, label in labels.items():
+        if not label.startswith("Speaker"):       # You/Meeting and manually named ones are not touched
             continue
-        egna = [t for t in turer if t[2] == spk]
-        if not egna:
+        own = [t for t in turns if t[2] == spk]
+        if not own:
             continue
-        start, slut, _ = max(egna, key=lambda t: t[1] - t[0])
-        if slut - start < RÖST_MIN:
+        start, end, _ = max(own, key=lambda t: t[1] - t[0])
+        if end - start < VOICE_MIN:
             continue
-        a, b = bästa_klipp(wav, env, start=start, slut=slut)
-        klipp = wav_läs(wav, a, b)
-        if not klipp[0]:
+        a, b = best_clip(wav, env, start=start, end=end)
+        clip = wav_read(wav, a, b)
+        if not clip[0]:
             continue
-        tmp = os.path.join(os.path.dirname(wav), f".röst_{spk}.wav")
-        wav_skriv(tmp, klipp[0], [klipp[1]], tystnad=0)
+        tmp = os.path.join(os.path.dirname(wav), f".voice_{spk}.wav")
+        wav_write(tmp, clip[0], [clip[1]], silence=0)
         try:
-            namn = känd_röst(tmp, refs)
+            name = known_voice(tmp, refs)
         finally:
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
-        if namn:
-            ut[label] = namn
-            log(f"röst: {label} på {os.path.basename(wav)} känd igen som {namn}")
-    return ut
+        if name:
+            out[label] = name
+            log(f"voice: {label} on {os.path.basename(wav)} recognized as {name}")
+    return out
 
 
-def spara_röst(namn, wav, env=None, start=None, slut=None):
-    """Sparar en röst som referens (0600). Redan sparad och längre -> behåll den gamla."""
-    a, b = bästa_klipp(wav, env, start=start, slut=slut)
-    rate, data = wav_läs(wav, a, b)
-    if not rate or len(data) < RÖST_MIN * rate * 2:
+def save_voice(name, wav, env=None, start=None, end=None):
+    """Saves a voice as a reference (0600). Already saved and longer -> keep the old one."""
+    a, b = best_clip(wav, env, start=start, end=end)
+    rate, data = wav_read(wav, a, b)
+    if not rate or len(data) < VOICE_MIN * rate * 2:
         return False
-    os.makedirs(RÖST_ROOT, mode=0o700, exist_ok=True)
-    path = os.path.join(RÖST_ROOT, namn.replace("/", "-") + ".wav")
-    gammal = os.path.getsize(path) if os.path.exists(path) else 0
-    if gammal >= len(data):
+    os.makedirs(VOICE_ROOT, mode=0o700, exist_ok=True)
+    path = os.path.join(VOICE_ROOT, name.replace("/", "-") + ".wav")
+    old = os.path.getsize(path) if os.path.exists(path) else 0
+    if old >= len(data):
         return False
-    wav_skriv(path, rate, [data], tystnad=0)
+    wav_write(path, rate, [data], silence=0)
     os.chmod(path, 0o600)
     return True
 
 
-def namn_på_talarna(wav, turer, etiketter, namn, env=None):
-    """Namngiven talare -> spara rösten, så nästa möte får namnet själv."""
-    if not namn:
+def apply_names(wav, turns, labels, names, env=None):
+    """A named speaker -> save the voice, so the next meeting gets the name by itself."""
+    if not names:
         return
-    for spk, label in etiketter.items():
-        if label not in set(namn.values()):
+    for spk, label in labels.items():
+        if label not in set(names.values()):
             continue
-        egna = [t for t in turer if t[2] == spk]
-        if not egna:
+        own = [t for t in turns if t[2] == spk]
+        if not own:
             continue
-        start, slut, _ = max(egna, key=lambda t: t[1] - t[0])
-        if slut - start >= RÖST_MIN and spara_röst(label, wav, env, start, slut):
-            log(f"röst sparad: {label} ur {os.path.basename(wav)}")
+        start, end, _ = max(own, key=lambda t: t[1] - t[0])
+        if end - start >= VOICE_MIN and save_voice(label, wav, env, start, end):
+            log(f"voice saved: {label} from {os.path.basename(wav)}")
 
 
-def cmd_modeller(_args):
-    print(json.dumps({"modeller": modell_katalog(), "vald": notat_config().get("modell") or "",
-                      "rot": MODEL_ROOT, "nedladdade": os.path.isdir(MODEL_ROOT)},
+def cmd_models(_args):
+    print(json.dumps({"models": model_catalog(), "selected": notat_config().get("model") or "",
+                      "root": MODEL_ROOT, "downloaded": os.path.isdir(MODEL_ROOT)},
                      ensure_ascii=False, indent=2))
     return 0
 
 
-def cmd_modell(args):
-    """notat modell <id> - välj modell (måste finnas nedladdad)."""
+def cmd_model(args):
+    """notat model <id> - choose model (must be downloaded)."""
     mid = args["_"][0] if args["_"] else ""
-    m = next((x for x in modell_katalog() if x["id"] == mid), None)
+    m = next((x for x in model_catalog() if x["id"] == mid), None)
     if m is None:
-        print(json.dumps({"ok": False, "error": f"okänd modell: {mid}"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": f"unknown model: {mid}"}, ensure_ascii=False))
         return 1
-    if not m["finns"]:
-        print(json.dumps({"ok": False, "id": mid, "saknas": True, "mb": m["mb"],
-                          "error": f"{m['namn']} är inte nedladdad"}, ensure_ascii=False))
+    if not m["downloaded"]:
+        print(json.dumps({"ok": False, "id": mid, "missing": True, "mb": m["mb"],
+                          "error": f"{m['name']} is not downloaded"}, ensure_ascii=False))
         return 1
     cfg = notat_config()
-    cfg["modell"] = mid
+    cfg["model"] = mid
     try:
         os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
         with open(CONFIG, "w", encoding="utf-8") as f:
@@ -576,38 +583,38 @@ def cmd_modell(args):
     except OSError as e:
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
         return 1
-    log(f"modell {mid} vald")
-    print(json.dumps({"ok": True, "vald": mid, "sökväg": m["sökväg"]}, ensure_ascii=False))
+    log(f"model {mid} selected")
+    print(json.dumps({"ok": True, "selected": mid, "path": m["path"]}, ensure_ascii=False))
     return 0
 
 
-def cmd_hamta(args):
-    """notat hamta <id> - laddar ner modellen och skriver ut en procentsats per rad."""
+def cmd_download(args):
+    """notat download <id> - downloads the model and prints a percentage per line."""
     mid = args["_"][0] if args["_"] else ""
-    m = next((x for x in MODELLER if x["id"] == mid), None)
+    m = next((x for x in MODELS if x["id"] == mid), None)
     if m is None:
-        print(json.dumps({"ok": False, "error": f"okänd modell: {mid}"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": f"unknown model: {mid}"}, ensure_ascii=False))
         return 1
-    if modell_sökväg(mid):
-        print(json.dumps({"ok": True, "id": mid, "redan": True, "sökväg": modell_sökväg(mid)},
+    if model_path(mid):
+        print(json.dumps({"ok": True, "id": mid, "already": True, "path": model_path(mid)},
                          ensure_ascii=False))
         return 0
     dest_dir = os.path.join(MODEL_ROOT, mid)
     os.makedirs(dest_dir, exist_ok=True)
-    dest, tmp = os.path.join(dest_dir, m["fil"]), os.path.join(dest_dir, m["fil"] + ".del")
+    dest, tmp = os.path.join(dest_dir, m["file"]), os.path.join(dest_dir, m["file"] + ".del")
     try:
-        ladda_ner(m["url"], tmp, min_mb=1)
+        download_file(m["url"], tmp, min_mb=1)
         os.replace(tmp, dest)
     except Exception as e:
         try:
             os.unlink(tmp)
         except OSError:
             pass
-        log(f"hamta {mid} misslyckades: {e}")
+        log(f"download {mid} failed: {e}")
         print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"}, ensure_ascii=False))
         return 1
-    log(f"hamta {mid} klar ({os.path.getsize(dest) >> 20} MB)")
-    print(json.dumps({"ok": True, "id": mid, "sökväg": dest, "mb": os.path.getsize(dest) >> 20},
+    log(f"download {mid} done ({os.path.getsize(dest) >> 20} MB)")
+    print(json.dumps({"ok": True, "id": mid, "path": dest, "mb": os.path.getsize(dest) >> 20},
                      ensure_ascii=False))
     return 0
 
@@ -625,20 +632,31 @@ def find_vad():
 
 SKIP_HINTS = ("null", "notat_test", "dummy")
 CONFIG = os.path.join(HOME, ".config/notat/config.json")
-UTESLUTNA = []      # fylls av device_list(): enheter som hoppats över, så det syns
+EXCLUDED = []      # filled by device_list(): devices that were skipped, so it shows
+
+
+# The config keys were Swedish until 1.1.1. An existing ~/.config/notat/config.json is read
+# through this map so a device list or model choice does not silently disappear; the English
+# key wins when both are present, and everything written back uses the English name.
+LEGACY_KEYS = {"exclude": "uteslut", "model": "modell", "speakers": "röster",
+               "speaker_count": "antal_talare", "vault": "valv", "names": "namn"}
 
 
 def notat_config():
     try:
         with open(CONFIG, encoding="utf-8") as f:
-            return json.load(f)
+            cfg = json.load(f)
     except Exception:
         return {}
+    for new, old in LEGACY_KEYS.items():
+        if new not in cfg and old in cfg:
+            cfg[new] = cfg[old]
+    return cfg
 
 
-def utesluten(node, desc, mönster):
+def is_excluded(node, desc, patterns):
     text = f"{node} {desc}".lower()
-    return any(m.lower() in text for m in mönster)
+    return any(m.lower() in text for m in patterns)
 
 
 def pactl_json(kind):
@@ -649,77 +667,77 @@ def pactl_json(kind):
         return []
 
 
-def clean_desc(desc):
+def clean_description(desc):
     d = (desc or "").strip()
     return d[len("Monitor of "):].strip() if d.startswith("Monitor of ") else d
 
 
-def enheter_alla():
-    """Alla enheter som går att välja, med vald-flagga (uteslutna listas också)."""
-    mönster = notat_config().get("uteslut") or []
-    ut = []
+def all_devices():
+    """All devices that can be selected, with a selected flag (excluded ones are listed too)."""
+    patterns = notat_config().get("exclude") or []
+    out = []
     for s in pactl_json("sinks"):
         name = (s.get("name") or "").strip()
         if not name or any(h in name.lower() for h in SKIP_HINTS):
             continue
-        desc = clean_desc(s.get("description")) or name
-        ut.append({"typ": "ut", "nod": name + ".monitor", "talare": "Mötet",
-                   "beskrivning": desc, "vald": not utesluten(name, desc, mönster)})
+        desc = clean_description(s.get("description")) or name
+        out.append({"kind": "out", "node": name + ".monitor", "speaker": "Meeting",
+                    "description": desc, "selected": not is_excluded(name, desc, patterns)})
     for s in pactl_json("sources"):
         name = (s.get("name") or "").strip()
         if not name or ".monitor" in name or any(h in name.lower() for h in SKIP_HINTS):
             continue
-        desc = clean_desc(s.get("description")) or name
-        ut.append({"typ": "in", "nod": name, "talare": "Du",
-                   "beskrivning": desc, "vald": not utesluten(name, desc, mönster)})
-    return ut
+        desc = clean_description(s.get("description")) or name
+        out.append({"kind": "in", "node": name, "speaker": "You",
+                    "description": desc, "selected": not is_excluded(name, desc, patterns)})
+    return out
 
 
 def device_list():
-    """Varje ljudutgång och varje ljudingång — inte bara standardenheterna.
+    """Every audio output and every audio input — not just the default devices.
 
-    'Allt ljud' betyder: spelar Zoom ut i hörlurarna medan videon går i högtalarna,
-    eller byter du mic mitt i, fångas båda. En enhet per ffmpeg, så en död enhet
-    (urkopplad USB, upptagen HDMI) fäller inte resten.
+    'All audio' means: if Zoom plays out through the headphones while the video goes to the
+    speakers, or you switch mic mid-way, both are captured. One device per ffmpeg, so a dead
+    device (unplugged USB, busy HDMI) does not bring down the rest.
     """
     sink_env, source_env = os.environ.get("NOTAT_SINK"), os.environ.get("NOTAT_SOURCE")
-    if sink_env or source_env:      # låst/testat läge: exakt två enheter
+    if sink_env or source_env:      # locked/tested mode: exactly two devices
         sink = sink_env or sh("pactl", "get-default-sink").stdout.strip()
         source = source_env or sh("pactl", "get-default-source").stdout.strip()
         if not sink or not source:
-            sys.exit("notat: pactl svarar inte (PipeWire igång?)")
+            sys.exit("notat: pactl is not answering (is PipeWire running?)")
         remote = sink if sink.endswith(".monitor") else sink + ".monitor"
-        return [("ut", remote, "Mötet", "vald utgång"), ("in", source, "Du", "vald ingång")]
-    UTESLUTNA.clear()
+        return [("out", remote, "Meeting", "selected output"), ("in", source, "You", "selected input")]
+    EXCLUDED.clear()
     tracks = []
-    for d in enheter_alla():
-        if d["vald"]:
-            tracks.append((d["typ"], d["nod"], d["talare"], d["beskrivning"]))
+    for d in all_devices():
+        if d["selected"]:
+            tracks.append((d["kind"], d["node"], d["speaker"], d["description"]))
         else:
-            typ = "utgång" if d["typ"] == "ut" else "ingång"
-            UTESLUTNA.append(f"{d['beskrivning']} ({typ})")
+            kind = "output" if d["kind"] == "out" else "input"
+            EXCLUDED.append(f"{d['description']} ({kind})")
     if not tracks:
-        sys.exit("notat: hittar inga ljudenheter (pactl -f json list sinks/sources)")
+        sys.exit("notat: found no audio devices (pactl -f json list sinks/sources)")
     return tracks
 
 
-def cmd_valj(args):
-    """Slår av/på en enhet i config, eller allt på: notat valj <nod> | notat valj alla"""
-    mål = args["_"][0] if args["_"] else "alla"
+def cmd_select(args):
+    """Turns a device off/on in config, or everything on: notat select <node> | notat select all"""
+    target = args["_"][0] if args["_"] else "all"
     cfg = notat_config()
-    mönster = list(cfg.get("uteslut") or [])
-    if mål == "alla":
-        cfg["uteslut"] = []
+    patterns = list(cfg.get("exclude") or [])
+    if target == "all":
+        cfg["exclude"] = []
     else:
-        träff = next((d for d in enheter_alla() if d["nod"] == mål), None)
-        if träff is None:
-            print(json.dumps({"ok": False, "error": f"okänd enhet: {mål}"}, ensure_ascii=False))
+        hit = next((d for d in all_devices() if d["node"] == target), None)
+        if hit is None:
+            print(json.dumps({"ok": False, "error": f"unknown device: {target}"}, ensure_ascii=False))
             return 1
-        nyckel = mål[:-len(".monitor")] if mål.endswith(".monitor") else mål
-        text = f"{nyckel} {träff['beskrivning']}".lower()
-        kvar = [m for m in mönster if m.lower() not in text]     # matchande mönster bort
-        # vald = påslagen nu: klicket ska slå AV den
-        cfg["uteslut"] = kvar + [nyckel] if träff["vald"] else kvar
+        key = target[:-len(".monitor")] if target.endswith(".monitor") else target
+        text = f"{key} {hit['description']}".lower()
+        rest = [m for m in patterns if m.lower() not in text]     # matching patterns removed
+        # selected = switched on now: the click should turn it OFF
+        cfg["exclude"] = rest + [key] if hit["selected"] else rest
     try:
         os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
         with open(CONFIG, "w", encoding="utf-8") as f:
@@ -727,20 +745,20 @@ def cmd_valj(args):
     except OSError as e:
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
         return 1
-    log(f"valj {mål} -> uteslut={cfg['uteslut']}")
-    print(json.dumps({"ok": True, "uteslut": cfg["uteslut"], "enheter": enheter_alla()},
+    log(f"select {target} -> exclude={cfg['exclude']}")
+    print(json.dumps({"ok": True, "exclude": cfg["exclude"], "devices": all_devices()},
                      ensure_ascii=False))
     return 0
 
 
 def vault_root():
-    """Var dokumenten hamnar: 'valv' i config först, sedan OmaScribes valv, annars egen mapp."""
-    från_env = os.environ.get("NOTAT_VAULT")
-    if från_env:
-        return os.path.expanduser(från_env)
-    egen = notat_config().get("valv")
-    if egen:
-        return os.path.expanduser(egen)
+    """Where the documents end up: 'vault' in config first, then OmaScribe's vault, otherwise our own folder."""
+    from_env = os.environ.get("NOTAT_VAULT")
+    if from_env:
+        return os.path.expanduser(from_env)
+    own = notat_config().get("vault")
+    if own:
+        return os.path.expanduser(own)
     try:
         with open(OMASCRIBE_CFG, encoding="utf-8") as f:
             root = json.load(f).get("vault_root")
@@ -748,7 +766,7 @@ def vault_root():
             return root
     except Exception:
         pass
-    return VAULT_FALLBACK if os.path.isdir(VAULT_FALLBACK) else os.path.join(HOME, "Documents/Anteckningar")
+    return VAULT_FALLBACK if os.path.isdir(VAULT_FALLBACK) else os.path.join(HOME, "Documents/Notes")
 
 
 def load_session():
@@ -760,7 +778,7 @@ def load_session():
 
 
 def alive(pid):
-    """Lever processen, och är det fortfarande vår ffmpeg? (pid återanvänds annars)"""
+    """Is the process alive, and is it still our ffmpeg? (the pid is reused otherwise)"""
     if not pid:
         return False
     try:
@@ -779,7 +797,7 @@ def session_pids(sess):
         return []
     pids = [t.get("pid") for t in sess.get("tracks") or []]
     if sess.get("pid"):
-        pids.append(sess["pid"])          # äldre sessioner
+        pids.append(sess["pid"])          # older sessions
     return [p for p in pids if p]
 
 
@@ -828,12 +846,12 @@ def job_state():
 
 
 def running(sess):
-    """True så länge minst en av inspelningarna lever."""
+    """True as long as at least one of the recordings is alive."""
     return any(alive(p) for p in session_pids(sess))
 
 
 def log(msg):
-    """Liten händelselogg: vem (förälder) gjorde vad - annars går det inte att utreda."""
+    """Small event log: who (the parent) did what - otherwise it cannot be investigated."""
     try:
         os.makedirs(os.path.dirname(LOG), exist_ok=True)
         ppid = os.getppid()
@@ -843,7 +861,7 @@ def log(msg):
         except OSError:
             parent = "?"
         with open(LOG, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now().isoformat(timespec='seconds')} {msg} (förälder {ppid}: {parent})\n")
+            f.write(f"{datetime.now().isoformat(timespec='seconds')} {msg} (parent {ppid}: {parent})\n")
     except OSError:
         pass
 
@@ -853,7 +871,7 @@ def notify(title, body):
         subprocess.Popen(["notify-send", "-a", "notat", title, body])
 
 
-def läs_json(path):
+def read_json(path):
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
@@ -861,12 +879,12 @@ def läs_json(path):
         return None
 
 
-def skriv_atomiskt(path, text):
-    """Skriv till en temp-fil och byt namn.
+def write_atomic(path, text):
+    """Write to a temp file and rename.
 
-    Temp + os.replace: en krasch mitt i skrivningen får inte lämna ett halvt
-    dokument (anteckningen blir tom/trunkerad) eller en halv session.json (som
-    då ser ut som "ingen inspelning").
+    Temp + os.replace: a crash in the middle of writing must not leave a half
+    document (the note becomes empty/truncated) or a half session.json (which
+    then looks like "no recording").
     """
     tmp = path + ".del"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -874,19 +892,19 @@ def skriv_atomiskt(path, text):
     os.replace(tmp, path)
 
 
-# ------------------------------------------------------------------ start/stopp
+# ------------------------------------------------------------------ start/stop
 
 def cmd_start(_args):
     sess = load_session()
     if running(sess):
-        print(json.dumps({"ok": False, "error": "spelar redan in", "since": sess["started"]}))
+        print(json.dumps({"ok": False, "error": "already recording", "since": sess["started"]}))
         return 0
     tracks = device_list()
     stamp = datetime.now().strftime("%Y-%m-%d %H-%M")
     outdir = os.path.join(RAW_ROOT, stamp)
     n = 2
     while os.path.exists(os.path.join(outdir, "session.json")):
-        outdir = os.path.join(RAW_ROOT, f"{stamp}-{n}")   # två inspelningar samma minut
+        outdir = os.path.join(RAW_ROOT, f"{stamp}-{n}")   # two recordings in the same minute
         n += 1
     os.makedirs(outdir, exist_ok=True)
     started = []
@@ -912,18 +930,18 @@ def cmd_start(_args):
             except OSError:
                 tail = "?"
             why.append(f"{t['desc']}: {tail}")
-        # ponytail: en död enhet får inte tysta de andra - bara noll levande är fel
-        print(json.dumps({"ok": False, "error": "ingen enhet kunde spelas in: " + " | ".join(why)},
+        # ponytail: one dead device must not silence the others - only zero alive is an error
+        print(json.dumps({"ok": False, "error": "no device could be recorded: " + " | ".join(why)},
                          ensure_ascii=False))
         return 1
     info = {"started": time.time(), "dir": outdir, "tracks": live, "pid": live[0]["pid"]}
     os.makedirs(STATE, exist_ok=True)
     text = json.dumps(info, ensure_ascii=False)
     for path in (SESSION, os.path.join(outdir, "session.json")):
-        skriv_atomiskt(path, text)
+        write_atomic(path, text)
     names = ", ".join(t["desc"] for t in live)
-    notify("Spelar in", f"{len(live)} enheter: {names[:70]}")
-    log(f"start {outdir} {len(live)}/{len(started)} enheter: {names}")
+    notify("Recording", f"{len(live)} devices: {names[:70]}")
+    log(f"start {outdir} {len(live)}/{len(started)} devices: {names}")
     print(json.dumps({"ok": True, "dir": outdir,
                       "tracks": [{"desc": t["desc"], "node": t["node"]} for t in live]},
                      ensure_ascii=False))
@@ -933,7 +951,7 @@ def cmd_start(_args):
 def stop_ffmpeg(sess):
     pids = [p for p in session_pids(sess) if alive(p)]
     for pid in pids:
-        os.kill(pid, signal.SIGINT)          # ffmpeg skriver klart wav-huvudet
+        os.kill(pid, signal.SIGINT)          # ffmpeg finishes writing the wav header
     for _ in range(100):
         if not any(alive(p) for p in pids):
             return True
@@ -947,7 +965,7 @@ def stop_ffmpeg(sess):
 def cmd_stop(args):
     sess = load_session()
     if not sess:
-        print(json.dumps({"ok": False, "error": "ingen inspelning"}))
+        print(json.dumps({"ok": False, "error": "no recording"}))
         return 1
     was_live = running(sess)
     stop_ffmpeg(sess)
@@ -957,13 +975,13 @@ def cmd_stop(args):
     except OSError:
         pass
     if seconds < 3 and not args.get("force"):
-        notify("Ingen inspelning", "Kortare än 3 sekunder - inget dokument skapades")
-        log(f"stop avbruten: bara {seconds}s")
-        print(json.dumps({"ok": False, "error": "för kort", "seconds": seconds}))
+        notify("No recording", "Shorter than 3 seconds - no document was created")
+        log(f"stop aborted: only {seconds}s")
+        print(json.dumps({"ok": False, "error": "too short", "seconds": seconds}))
         return 1
     if args.get("wait"):
-        path = transcribe_dir(sess["dir"], seconds, sammanfatta=not args.get("no-summary"))
-        log(f"stop efter {seconds}s -> {path}")
+        path = transcribe_dir(sess["dir"], seconds, summary=not args.get("no-summary"))
+        log(f"stop after {seconds}s -> {path}")
         print(json.dumps({"ok": bool(path), "note": path, "seconds": seconds}))
         return 0 if path else 1
 
@@ -979,31 +997,31 @@ def cmd_stop(args):
                              start_new_session=True)
     job_write(child.pid, sess["dir"], seconds)
     log(f"stop after {seconds}s -> transcription continues in the background (pid {child.pid})")
-    notify("Transkriberar", f"{mmss(seconds)} ljud spelas igenom — dokumentet kommer när det är klart")
+    notify("Transcribing", f"{mmss(seconds)} of audio is being processed — the document arrives when it is done")
     print(json.dumps({"ok": True, "transcribing": True, "dir": sess["dir"],
                       "seconds": seconds}, ensure_ascii=False))
     return 0
 
 
-# ------------------------------------------------------------------ transkribering
+# ------------------------------------------------------------------ transcription
 
 def whisper(wav, outbase, model, vad):
-    # INTE -nt: utan tidsstämplar slår whisper ihop talet till några få klumpar (mätt:
-    # 3 segment på 18-46 s för 110 s tal, mot 24 segment på 1-5 s med tidsstämplar).
-    # Grova segment gör både dokumentet trögare att läsa och talaruppdelningen omöjlig.
+    # NOT -nt: without timestamps whisper merges the speech into a few blobs (measured:
+    # 3 segments of 18-46 s for 110 s of speech, vs 24 segments of 1-5 s with timestamps).
+    # Coarse segments make both the document harder to read and the speaker separation impossible.
     args = [WHISPER, "-m", model, "-f", wav, "-l", LANG, "-oj", "-of", outbase, "-t", "12"]
     if vad:
         args += ["--vad", "-vm", vad]
     r = sh(*args)
     path = outbase + ".json"
     if not os.path.exists(path):
-        return None, (r.stderr or r.stdout or "whisper gav ingen utdata").strip()[-400:]
+        return None, (r.stderr or r.stdout or "whisper gave no output").strip()[-400:]
     with open(path, encoding="utf-8") as f:
         return json.load(f), None
 
 
 def segments(data, speaker):
-    """whisper-clis JSON -> [(start_sek, slut_sek, talare, text)]"""
+    """whisper-cli's JSON -> [(start_sec, end_sec, speaker, text)]"""
     out = []
     for seg in (data or {}).get("transcription", []):
         text = (seg.get("text") or "").strip()
@@ -1012,14 +1030,14 @@ def segments(data, speaker):
         off = seg.get("offsets") or {}
         start = (off.get("from") or 0) / 1000.0
         end = (off.get("to") or 0) / 1000.0
-        if "[" in text or "(musik" in text.lower():     # whisper brusmarkörer
+        if "[" in text or "(musik" in text.lower():     # whisper noise markers
             continue
         out.append((start, end, speaker, text))
     return out
 
 
 def paragraphs(segs, gap=3.0, maxlen=400):
-    """Slår ihop intilliggande rader från samma talare - läsbart dokument."""
+    """Merges adjacent lines from the same speaker - a readable document."""
     out = []
     for start, end, who, text in segs:
         if out and out[-1][2] == who and start - out[-1][1] < gap and len(out[-1][3]) < maxlen:
@@ -1031,10 +1049,10 @@ def paragraphs(segs, gap=3.0, maxlen=400):
 
 
 def envelope(path, hop_ms=20):
-    """RMS per 20 ms - ett kuvert att jämföra ljud med.
+    """RMS per 20 ms - an envelope to compare audio with.
 
-    ponytail: ren Python-loop över samplen (~6 s per timme och spår). numpy om det
-    blir besvärande, men det finns inte garanterat på maskinen.
+    ponytail: a pure Python loop over the samples (~6 s per hour and track). numpy if it
+    becomes a nuisance, but it is not guaranteed to be on the machine.
     """
     import array
     import wave
@@ -1055,10 +1073,10 @@ def envelope(path, hop_ms=20):
 
 
 def korr(a, b, max_lag=50):
-    """Högsta normaliserade korrelationen mellan två kuvert, med eftersökning av fördröjning.
+    """The highest normalized correlation between two envelopes, searching over the delay.
 
-    ±max_lag fönster täcker att ljudet tar olika lång väg till en mikrofon och till
-    utgångens monitor.
+    ±max_lag windows cover the fact that the audio takes a different path to a microphone and to
+    the output's monitor.
     """
     n = min(len(a), len(b))
     if n < 5:
@@ -1066,7 +1084,7 @@ def korr(a, b, max_lag=50):
     a, b = a[:n], b[:n]
     ma, mb = sum(a) / n, sum(b) / n
     da, db = [x - ma for x in a], [y - mb for y in b]
-    bäst = 0.0
+    best = 0.0
     for lag in range(-max_lag, max_lag + 1):
         x, y = (da[:n - lag], db[lag:]) if lag >= 0 else (da[-lag:], db[:n + lag])
         if len(x) < 5:
@@ -1074,8 +1092,8 @@ def korr(a, b, max_lag=50):
         num = sum(p * q for p, q in zip(x, y))
         den = (sum(p * p for p in x) ** 0.5) * (sum(q * q for q in y) ** 0.5)
         if den > 0:
-            bäst = max(bäst, num / den)
-    return bäst
+            best = max(best, num / den)
+    return best
 
 
 def track_no(par):
@@ -1086,34 +1104,34 @@ def track_no(par):
 
 
 def dedupe(paras, envs, ratio=0.85, slack=8.0):
-    """Samma ljud fångat av flera enheter ska inte stå flera gånger.
+    """The same audio captured by several devices must not appear several times.
 
-    Texten duger inte som mått: whisper skriver olika ord för samma mening beroende på
-    vilken mikrofon som hörde den (mätt: "Vi börjar om den här kursen" mot "Någonting i
-    början av kursen" - 0,4 i textlikhet för samma sekund). Kuverten däremot är samma
-    ljud. Den starkaste kopian behålls - linjeljudet ligger högst när mötet hörs i
-    högtalarna, din egen mikrofon när du pratar.
+    The text is no good as a measure: whisper writes different words for the same sentence depending on
+    which microphone heard it (measured: "Vi börjar om den här kursen" against "Någonting i
+    början av kursen" - 0.4 in text similarity for the same second). The envelopes, however, are the same
+    audio. The strongest copy is kept - the line audio sits highest when the meeting is heard in
+    the speakers, your own microphone when you are talking.
 
-    Mätt två gånger om, för den här funktionen har två fällor:
+    Measured twice, because this function has two traps:
 
-    - **Styckesgränserna glider mellan enheter.** Whisper lägger samma mening några
-      sekunder olika på olika spår (mätt: "ut 46-48 s" mot "mic 48-52 s" för samma
-      mening). Att jämföra bara den tid båda styckena *påstår* att de täcker gav 0,57
-      och dubbletten gick igenom. Därför avgör närheten i tid (slack) om paret är samma
-      händelse, och sedan jämförs den ena enhetens tidsfönster mot den andras ljud vid
-      *samma* tidpunkt (0,99 - dubbletten hittas).
-    - **Unionen av de två fönstren duger inte som jämförelse.** När båda spåren bär
-      samma ljud ger vilket gemensamt fönster som helst 0,99, även för två stycken 20
-      sekunder isär - allt skulle slås ihop. Fönstret måste vara den ena enhetens eget.
+    - **The paragraph boundaries slide between devices.** Whisper places the same sentence a few
+      seconds differently on different tracks (measured: "ut 46-48 s" against "mic 48-52 s" for the same
+      sentence). Comparing only the time both paragraphs *claim* to cover gave 0.57
+      and the duplicate slipped through. Therefore the closeness in time (slack) decides whether the pair is the same
+      event, and then one device's time window is compared with the other's audio at
+      the *same* point in time (0.99 - the duplicate is found).
+    - **The union of the two windows is no good as a comparison.** When both tracks carry
+      the same audio, any common window gives 0.99, even for two paragraphs 20
+      seconds apart - everything would be merged. The window must be the one device's own.
     """
-    def nivå(par):
+    def level(par):
         env, hop = envs.get(track_no(par), (None, 0))
         if not env:
             return 0.0
         seg = env[int(par[0] / hop):int(par[1] / hop)] or [0]
         return sum(seg) / len(seg)
 
-    def samma_ljud(p, q):
+    def same_audio(p, q):
         if abs(p[0] - q[0]) > slack or p[1] <= p[0]:
             return False
         envp, hopp = envs.get(track_no(p), (None, 0))
@@ -1121,50 +1139,50 @@ def dedupe(paras, envs, ratio=0.85, slack=8.0):
         if not envp or not envq or hopp != hopq:
             return False
         a = envp[int(p[0] / hopp):int(p[1] / hopp)]
-        b = envq[int(p[0] / hopq):int(p[1] / hopq)]     # samma tid, andra enheten
+        b = envq[int(p[0] / hopq):int(p[1] / hopq)]     # same time, the other device
         return korr(a, b) >= ratio
 
-    # Starkast först: då är det alltid den starkaste kopian som blir kvar, och listan över
-    # behållna stycken behöver bara växa (sorterad på starttid, bisect hittar kandidaterna).
-    # Utan tidssorteringen hade varje stycke jämförts med alla (en timmes möte med
-    # talaruppdelning blir tusentals stycken).
+    # Strongest first: then it is always the strongest copy that is left, and the list of
+    # kept paragraphs only needs to grow (sorted by start time, bisect finds the candidates).
+    # Without the time sort every paragraph would have been compared with all of them (an hour-long meeting with
+    # speaker separation becomes thousands of paragraphs).
     keep, start = [], []
-    for p in sorted(paras, key=lambda x: -nivå(x)):
-        dubblett = False
+    for p in sorted(paras, key=lambda x: -level(x)):
+        duplicate = False
         for q in keep[bisect.bisect_left(start, p[0] - slack):]:
             if q[0] - p[0] > slack:
                 break
-            if track_no(p) == track_no(q):               # samma enhet -> aldrig dubblett
+            if track_no(p) == track_no(q):               # same device -> never a duplicate
                 continue
-            if samma_ljud(p, q):
-                dubblett = True
+            if same_audio(p, q):
+                duplicate = True
                 break
-        if not dubblett:
+        if not duplicate:
             i = bisect.bisect_left(start, p[0])
             keep.insert(i, p)
             start.insert(i, p[0])
-    # Samma starttid är vanligt när två enheter delar ett stycke: då avgör spårnumret så
-    # ordningen blir densamma varje gång (stabil sortering räckte inte när styckena läggs
-    # in starkast-först).
+    # The same start time is common when two devices share a paragraph: then the track number decides so
+    # the order is the same every time (stable sorting was not enough when the paragraphs are laid
+    # down strongest-first).
     keep.sort(key=lambda p: (p[0], track_no(p)))
     return keep
 
 
-def eko_stycken(paras, envs, spårtyp, ratio=0.5):
-    """Räknar mikrofonstycken som hörde utgången (dvs mötet gick i högtalarna).
+def echo_paragraphs(paras, envs, track_kind, ratio=0.5):
+    """Counts microphone paragraphs that heard the output (i.e. the meeting went through the speakers).
 
-    Mätt på en riktig körning: mikrofon mot utgång gav 0,64-0,70 i hel-stycke-
-    korrelation när ljudet hördes i rummet, medan olika ljud samtidigt ligger under
-    0,3. Gränsen 0,5 skiljer de två fallen. Vilket spår som är vilket kommer ur
-    'spårtyp' (diariseringen kan ha bytt ut talaretiketten i texten).
+    Measured on a real run: microphone against output gave 0.64-0.70 in whole-paragraph
+    correlation when the audio was heard in the room, while different audio at the same time lies below
+    0.3. The limit 0.5 separates the two cases. Which track is which comes from
+    'track_kind' (the diarisation may have swapped the speaker label in the text).
     """
-    ut = [p for p in paras if spårtyp.get(track_no(p)) == "ut"]
-    mic = [p for p in paras if spårtyp.get(track_no(p)) == "in"]
-    träffar = 0
+    out = [p for p in paras if track_kind.get(track_no(p)) == "out"]
+    mic = [p for p in paras if track_kind.get(track_no(p)) == "in"]
+    hits = 0
     for p in mic:
-        for q in ut:
-            kortast = min(p[1] - p[0], q[1] - q[0])
-            if kortast <= 0 or min(p[1], q[1]) - max(p[0], q[0]) < 0.5 * kortast:
+        for q in out:
+            shortest = min(p[1] - p[0], q[1] - q[0])
+            if shortest <= 0 or min(p[1], q[1]) - max(p[0], q[0]) < 0.5 * shortest:
                 continue
             envp, hopp = envs.get(track_no(p), (None, 0))
             envq, hopq = envs.get(track_no(q), (None, 0))
@@ -1172,12 +1190,12 @@ def eko_stycken(paras, envs, spårtyp, ratio=0.5):
                 continue
             if korr(envp[int(p[0] / hopp):int(p[1] / hopp)],
                     envq[int(q[0] / hopq):int(q[1] / hopq)]) >= ratio:
-                träffar += 1
+                hits += 1
                 break
-    return träffar, len(mic)
+    return hits, len(mic)
 
 
-def talare_i_texten(paras):
+def speakers_in_text(paras):
     """The speakers that actually appear in the document.
 
     Diarisation labels each track on its own and creates clusters that later
@@ -1185,8 +1203,8 @@ def talare_i_texten(paras):
     The document must not claim more voices than it shows (measured: 24 labels
     for 7 speakers in the text).
     """
-    return sorted({p[2].split("#")[0] for p in paras if p[2].split("#")[0] != "Mötet"},
-                  key=lambda s: (not s.startswith("Du"), s))
+    return sorted({p[2].split("#")[0] for p in paras if p[2].split("#")[0] != "Meeting"},
+                  key=lambda s: (not s.startswith("You"), s))
 
 
 def mmss(sec):
@@ -1194,14 +1212,15 @@ def mmss(sec):
     return f"{sec // 60:02d}:{sec % 60:02d}"
 
 
-# ------------------------------------------------------------------ sammanfattning
+# ------------------------------------------------------------------ summarization
 
-SUMMARY_SYS = ("Du sammanfattar utskrifter från möten och föreläsningar på svenska. "
-               "Svara i markdown, kort och konkret, utan inledning eller förklaring av vad du gör.")
+SUMMARY_SYS = ("You summarize transcripts from meetings and lectures. Write the summary in "
+               "the language the transcript is in. "
+               "Answer in markdown, short and concrete, without an introduction or explanation of what you are doing.")
 
 
 def ai_config():
-    """AI-inställningarna läses ur OmaScribes config, så de följer hans egna val."""
+    """The AI settings are read from OmaScribe's config, so they follow the user's own choices."""
     cfg = {}
     try:
         with open(OMASCRIBE_CFG, encoding="utf-8") as f:
@@ -1227,7 +1246,7 @@ def ai_chat(endpoint, key, model, system, user, timeout=180):
 
 
 def chunks(text, size=16000):
-    """Delar på styckegräns: en timmes föreläsning ryms inte i ett anrop."""
+    """Splits on paragraph boundaries: an hour-long lecture does not fit in one call."""
     out, cur = [], ""
     for para in text.split("\n\n"):
         if cur and len(cur) + len(para) > size:
@@ -1240,42 +1259,42 @@ def chunks(text, size=16000):
 
 
 def summarize(transcript):
-    """(sammanfattning, fel). Fel får aldrig stoppa dokumentet."""
+    """(summary, error). An error must never stop the document."""
     endpoint, key, model = ai_config()
     if not endpoint:
-        return None, "ingen AI-endpoint konfigurerad"
+        return None, "no AI endpoint configured"
     try:
         parts = chunks(transcript)
         if len(parts) == 1:
             txt = ai_chat(endpoint, key, model, SUMMARY_SYS,
-                          "Sammanfatta: kort översikt i 3-5 punkter, sedan 'Beslut', "
-                          "'Uppgifter' och 'Nyckelbegrepp' om sådant nämns.\n\n" + parts[0])
+                          "Summarize: a short overview in 3-5 bullets, then 'Decisions', "
+                          "'Tasks' and 'Key terms' if such are mentioned.\n\n" + parts[0])
         else:
-            delar = [ai_chat(endpoint, key, model, SUMMARY_SYS,
-                             f"Detta är del {i} av {len(parts)} av en utskrift. Sammanfatta avsnittet "
-                             "i punkter (ta med beslut, uppgifter, datum, namn).\n\n" + p)
-                     for i, p in enumerate(parts, 1)]
+            partial = [ai_chat(endpoint, key, model, SUMMARY_SYS,
+                               f"This is part {i} of {len(parts)} of a transcript. Summarize the section "
+                               "in bullets (include decisions, tasks, dates, names).\n\n" + p)
+                       for i, p in enumerate(parts, 1)]
             txt = ai_chat(endpoint, key, model, SUMMARY_SYS,
-                          "Slå ihop dessa delsammanfattningar till EN: kort översikt i 3-5 punkter, "
-                          "sedan 'Beslut', 'Uppgifter' och 'Nyckelbegrepp'.\n\n" + "\n\n".join(delar))
+                          "Merge these partial summaries into ONE: a short overview in 3-5 bullets, "
+                          "then 'Decisions', 'Tasks' and 'Key terms'.\n\n" + "\n\n".join(partial))
         return txt, None
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
 
 
-def transcribe_dir(rawdir, seconds, sammanfatta=True):
+def transcribe_dir(rawdir, seconds, summary=True):
     if not os.path.isdir(rawdir):
-        sys.exit(f"notat: {rawdir} finns inte")
+        sys.exit(f"notat: {rawdir} does not exist")
     meta = {}
     try:
         with open(os.path.join(rawdir, "session.json"), encoding="utf-8") as f:
             meta = json.load(f)
     except Exception:
         pass
-    tracks = [(t["file"], t.get("label", "Mötet"), t.get("desc") or t["file"])
+    tracks = [(t["file"], t.get("label", "Meeting"), t.get("desc") or t["file"])
               for t in (meta.get("tracks") or []) if t.get("file")]
-    if not tracks:      # äldre inspelning, eller dir där sessionen försvunnit
-        tracks = [("remote.wav", "Mötet", "ljudutgången"), ("mic.wav", "Du", "mikrofonen")]
+    if not tracks:      # older recording, or a dir where the session is gone
+        tracks = [("remote.wav", "Meeting", "the audio output"), ("mic.wav", "You", "the microphone")]
 
     def duration(path):
         r = sh("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path)
@@ -1284,7 +1303,7 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
         except ValueError:
             return 0.0
 
-    if not seconds:      # omtranskribering: längden finns i filen, inte i någon session
+    if not seconds:      # re-transcription: the length is in the file, not in any session
         seconds = int(meta.get("seconds") or 0)
     if not seconds:
         for f, _l, _d in tracks:
@@ -1295,140 +1314,140 @@ def transcribe_dir(rawdir, seconds, sammanfatta=True):
 
     model = find_model()
     vad = find_vad()
-    röster = röster_på()
-    antal_talare = int(notat_config().get("antal_talare") or 0)
-    namn = meta.get("names") or {}
+    speakers = speakers_enabled()
+    speaker_count = int(notat_config().get("speaker_count") or 0)
+    names = meta.get("names") or {}
     all_segs = []
     failures = []
-    kallor = []
+    sources = []
     envs = {}
-    dian = {}          # spårnummer -> talarturer
-    etiketter = {}     # spårnummer -> {speaker_00: 'Deltagare 1', ...}
-    igenkända = set()  # namn som kom ur röstregistret, inte från användaren - märks i dokumentet
-    spårtyp = {}       # spårnummer -> 'ut' (mötet) eller 'in' (mikrofon)
-    talarräknare = 0
+    diar_map = {}          # track number -> speaker turns
+    labels = {}            # track number -> {speaker_00: 'Speaker 1', ...}
+    recognized = set()     # names that came from the voice registry, not from the user - marked in the document
+    track_kind = {}        # track number -> 'out' (the meeting) or 'in' (microphone)
+    speaker_counter = 0
     for i, (f, who, desc) in enumerate(tracks, 1):
         p = os.path.join(rawdir, f)
         if not os.path.exists(p):
-            failures.append(f"{desc}: ingen fil (enheten dog under inspelningen)")
+            failures.append(f"{desc}: no file (the device died during recording)")
             continue
-        spårtyp[i] = "ut" if who.startswith("Mötet") else "in"
+        track_kind[i] = "out" if who.startswith("Meeting") else "in"
         dur = duration(p)
         if dur >= 1:
-            kallor.append(f"{desc} ({mmss(dur)})")
+            sources.append(f"{desc} ({mmss(dur)})")
         envs[i] = envelope(p)
-        if röster and dur >= 15:
-            turer, diarfel = diar_turer(p, antal_talare)
-            if turer:
-                stämplar = diar_etiketter(turer, dominant="Du" if who.startswith("Du") else None,
-                                          bas=talarräknare)
-                dian[i] = turer
-                # numreringen räknas på de råa etiketterna: ett namn får inte flytta nästa spårs nummer
-                talarräknare += sum(1 for v in stämplar.values() if v.startswith("Deltagare"))
-                etiketter[i] = byt_talarnamn(stämplar, namn)
-                if namn:
-                    namn_på_talarna(p, dian[i], etiketter[i], namn, envs.get(i))
-                if namn_på():
-                    # känd röst -> namnet, annars står Deltagare N kvar (ingen gissning)
-                    känt = kända_röster(p, dian[i], etiketter[i], envs.get(i))
-                    if känt:
-                        igenkända |= set(känt.values())
-                        etiketter[i] = byt_talarnamn(etiketter[i], känt)
+        if speakers and dur >= 15:
+            turns, diar_err = diar_turns(p, speaker_count)
+            if turns:
+                raw_labels = diar_labels(turns, dominant="You" if who.startswith("You") else None,
+                                         base=speaker_counter)
+                diar_map[i] = turns
+                # the numbering is counted on the raw labels: a name must not shift the next track's number
+                speaker_counter += sum(1 for v in raw_labels.values() if v.startswith("Speaker"))
+                labels[i] = rename_speakers(raw_labels, names)
+                if names:
+                    apply_names(p, diar_map[i], labels[i], names, envs.get(i))
+                if names_enabled():
+                    # known voice -> the name, otherwise Speaker N stays (no guess)
+                    known = known_voices(p, diar_map[i], labels[i], envs.get(i))
+                    if known:
+                        recognized |= set(known.values())
+                        labels[i] = rename_speakers(labels[i], known)
             else:
-                failures.append(f"{desc}: talaruppdelningen misslyckades ({diarfel})")
-                log(f"diarisering av {f}: {diarfel}")
+                failures.append(f"{desc}: the speaker separation failed ({diar_err})")
+                log(f"diarisation of {f}: {diar_err}")
         data, err = whisper(p, os.path.join(rawdir, os.path.splitext(f)[0]), model, vad)
         if err:
             failures.append(f"{desc}: {err}")
             continue
-        # enhetens nummer i talaretiketten: två mikrofoner har samma "Du" men är olika spår
+        # the device's number in the speaker label: two microphones share the same "You" but are different tracks
         segs = segments(data, f"{who}#{i}")
-        if etiketter.get(i):
-            # talaren sätts per segment: först därefter slås stycken ihop, annars kan ett
-            # stycke spänna flera röster och etiketten blir en gissning
-            segs = märk_segment(segs, dian[i], etiketter[i])
+        if labels.get(i):
+            # the speaker is set per segment: only after that are paragraphs merged, otherwise a
+            # paragraph can span several voices and the label becomes a guess
+            segs = label_segments(segs, diar_map[i], labels[i])
         all_segs += segs
     all_segs.sort(key=lambda s: s[0])
     paras = dedupe(paragraphs(all_segs), envs)
 
     stamp = os.path.basename(rawdir)
-    try:   # de första 16 tecknen är tidsstämpeln även när mappen fick "-2"-svans
+    try:   # the first 16 characters are the timestamp even when the folder got a "-2" tail
         when = datetime.strptime(stamp[:16], "%Y-%m-%d %H-%M").strftime("%Y-%m-%d %H:%M")
     except ValueError:
         when = stamp
-    title = (meta.get("title") or "").strip() or f"Möte {stamp}"
-    title = title.replace("/", "-")        # rubriken blir också filnamn
+    title = (meta.get("title") or "").strip() or f"Meeting {stamp}"
+    title = title.replace("/", "-")        # the heading also becomes a file name
     lines = [f"# {title}", "",
-             f"**Inspelat:** {when} · {mmss(seconds)} · "
-             f"{'VAD' if vad else 'ingen VAD'} · {'röster · ' if etiketter else ''}"
-             f"modell {modell_namn(model)}", ""]
+             f"**Recorded:** {when} · {mmss(seconds)} · "
+             f"{'VAD' if vad else 'no VAD'} · {'speakers · ' if labels else ''}"
+             f"model {model_name(model)}", ""]
     if meta.get("participants"):
-        lines += [f"**Deltagare:** {' · '.join(meta['participants'])}", ""]
-    if kallor:
-        lines += [f"**Källor:** {' · '.join(kallor)}", ""]
-    if etiketter:
-        använda = talare_i_texten(paras)
-        if använda:
-            visade = " · ".join(f"{n} (röst)" if n in igenkända else n for n in använda)
-            lines += [f"**Talare:** {visade} — rösterna skiljs åt lokalt, "
-                      "numren gäller den här inspelningen", ""]
-    lines += [f"**Rå ljud:** `{rawdir}`", ""]
+        lines += [f"**Participants:** {' · '.join(meta['participants'])}", ""]
+    if sources:
+        lines += [f"**Sources:** {' · '.join(sources)}", ""]
+    if labels:
+        used = speakers_in_text(paras)
+        if used:
+            shown = " · ".join(f"{n} (voice)" if n in recognized else n for n in used)
+            lines += [f"**Speakers:** {shown} — the voices are told apart locally, "
+                      "the numbers apply to this recording", ""]
+    lines += [f"**Raw audio:** `{rawdir}`", ""]
     if not vad:
-        lines += ["> [!warning] Ingen VAD-modell hittad - tysta partier kan bli påhittad text", ""]
-    eko, antal_mic = eko_stycken(paras, envs, spårtyp)
-    if eko:
-        lines += [f"> [!warning] Mötets ljud hördes i rummet ({eko} av {antal_mic} mikrofonstycken "
-                  "är samma ljud som utgången): samma diskussion står därför två gånger. "
-                  "Hörlurar - eller ekodämpning i mötesappen - ger en ren text.", ""]
+        lines += ["> [!warning] No VAD model found - silent parts can become invented text", ""]
+    echo, mic_count = echo_paragraphs(paras, envs, track_kind)
+    if echo:
+        lines += [f"> [!warning] The meeting audio was heard in the room ({echo} of {mic_count} microphone pieces "
+                  "is the same audio as the output): the same discussion therefore appears twice. "
+                  "Headphones - or echo cancellation in the meeting app - give a clean text.", ""]
     if failures:
-        lines += ["> [!warning] Transkriberingen är ofullständig", *[f"> {f}" for f in failures], ""]
+        lines += ["> [!warning] The transcription is incomplete", *[f"> {f}" for f in failures], ""]
     if not paras:
-        lines += ["_Inget tal hittades i inspelningen._", ""]
-    lines += ["## Transkription", ""]
+        lines += ["_No speech was found in the recording._", ""]
+    lines += ["## Transcript", ""]
     for start, _end, who, text in paras:
         lines.append(f"**[{mmss(start)}] {who.split('#')[0]}:** {text}")
         lines.append("")
-    lines += ["## Egna anteckningar", "", ""]
+    lines += ["## My notes", "", ""]
     content = "\n".join(lines)
 
-    dest = os.path.join(vault_root(), VAULT_FOLDER)
+    dest = docs_dir()
     os.makedirs(dest, exist_ok=True)
     path = os.path.join(dest, f"{title}.md")
     n = 2
     while os.path.exists(path):
         path = os.path.join(dest, f"{title} {n}.md")
         n += 1
-    skriv_atomiskt(path, content)
+    write_atomic(path, content)
 
-    notify("Anteckning klar", f"{os.path.basename(path)} · {len(paras)} stycken")
+    notify("Note ready", f"{os.path.basename(path)} · {len(paras)} paragraphs")
 
-    # Sammanfattningen hämtas EFTER att dokumentet skrivits: en seg eller död
-    # AI-tjänst får aldrig kosta dig utskriften.
-    if sammanfatta and paras:
+    # The summary is fetched AFTER the document has been written: a slow or dead
+    # AI service must never cost you the transcript.
+    if summary and paras:
         transcript = "\n".join(f"[{mmss(s)}] {who.split('#')[0]}: {text}" for s, _e, who, text in paras)
-        log(f"sammanfattar {len(transcript)} tecken via AI ...")
+        log(f"summarizing {len(transcript)} characters via AI ...")
         txt, err = summarize(transcript)
         if txt:
             try:
                 with open(path, encoding="utf-8") as f:
                     current = f.read()
-                marker = "## Transkription"
+                marker = "## Transcript"
                 if marker in current:
                     head, rest = current.split(marker, 1)
-                    skriv_atomiskt(path, head + "## Sammanfattning\n\n" + txt + "\n\n" + marker + rest)
-                log(f"sammanfattning inlagd ({len(txt)} tecken)")
+                    write_atomic(path, head + "## Summary\n\n" + txt + "\n\n" + marker + rest)
+                log(f"summary inserted ({len(txt)} characters)")
             except OSError as e:
-                log(f"kunde inte lägga in sammanfattningen: {e}")
+                log(f"could not insert the summary: {e}")
         else:
-            log(f"ingen sammanfattning: {err}")
-            notify("Ingen sammanfattning", err or "okänt fel")
+            log(f"no summary: {err}")
+            notify("No summary", err or "unknown error")
     return path
 
 
-def modell_namn(path):
-    """Modellens namn till dokumentet - filnamnet 'ggml-model.bin' säger ingenting."""
-    for m in MODELLER:
-        if modell_sökväg(m["id"]) == path:
+def model_name(path):
+    """The model's name for the document - the file name 'ggml-model.bin' says nothing."""
+    for m in MODELS:
+        if model_path(m["id"]) == path:
             return m["id"]
     return os.path.basename(path)
 
@@ -1436,7 +1455,7 @@ def modell_namn(path):
 def cmd_transcribe(args):
     rawdir = args["_"][0] if args["_"] else None
     if not rawdir:
-        sys.exit("notat transcribe <mapp med remote.wav/mic.wav> [sekunder]")
+        sys.exit("notat transcribe <dir with remote.wav/mic.wav> [seconds]")
     meta = {}
     try:
         with open(os.path.join(rawdir, "session.json"), encoding="utf-8") as f:
@@ -1446,7 +1465,7 @@ def cmd_transcribe(args):
     seconds = int(args["_"][1]) if len(args["_"]) > 1 else int(meta.get("seconds") or 0)
     job_write(os.getpid(), rawdir, seconds)
     try:
-        path = transcribe_dir(rawdir, seconds, sammanfatta=not args.get("no-summary"))
+        path = transcribe_dir(rawdir, seconds, summary=not args.get("no-summary"))
         log(f"transcription done ({seconds}s) -> {path}")
         print(path)
     finally:
@@ -1474,205 +1493,212 @@ def cmd_status(args):
     if args.get("json"):
         print(json.dumps(info))
     else:
-        print(f"{'SPELAR IN ' + mmss(info['seconds']) if live else 'spelar inte in'}"
+        print(f"{'RECORDING ' + mmss(info['seconds']) if live else 'not recording'}"
               + (f"  ({info['dir']})" if live else "")
-              + (f"  TRANSKRIBERAR {mmss(info['transcribing_seconds'])}" if job else ""))
+              + (f"  TRANSCRIBING {mmss(info['transcribing_seconds'])}" if job else ""))
     return 0
 
 
 def cmd_devices(_args):
-    device_list()          # validerar och fyller UTESLUTNA
-    print(json.dumps({"enheter": enheter_alla(),
-                      "uteslutna": UTESLUTNA,
+    device_list()          # validates and fills EXCLUDED
+    print(json.dumps({"devices": all_devices(),
+                      "excluded": EXCLUDED,
                       "config": CONFIG,
                       "model": find_model(), "vad": find_vad(),
-                      "röster": {"på": röster_på(), "nedladdade": diar_finns(),
-                                 "tröskel": DIAR_TRÖSKEL,
-                                 "antal_talare": notat_config().get("antal_talare") or 0},
-                      "namn": {"på": namn_på(), "kända": [n for n, _p in referenser()],
-                               "tröskel": RÖST_TRÖSKEL, "rot": RÖST_ROOT},
-                      "vault": os.path.join(vault_root(), VAULT_FOLDER)},
+                      "speakers": {"on": speakers_enabled(), "downloaded": diar_available(),
+                                   "threshold": DIAR_THRESHOLD,
+                                   "speaker_count": notat_config().get("speaker_count") or 0},
+                      "names": {"on": names_enabled(), "known": [n for n, _p in references()],
+                                "threshold": VOICE_THRESHOLD, "root": VOICE_ROOT},
+                      "vault": docs_dir()},
                      ensure_ascii=False, indent=2))
     return 0
 
 
-def senaste_raw():
-    """Senaste inspelningsmappen - 'notat möte' utan pågående inspelning gäller den."""
+def latest_raw():
+    """The latest recording folder - 'notat meeting' with no ongoing recording applies to it."""
     try:
-        mappar = sorted(d for d in os.listdir(RAW_ROOT)
-                        if os.path.isdir(os.path.join(RAW_ROOT, d)))
+        folders = sorted(d for d in os.listdir(RAW_ROOT)
+                         if os.path.isdir(os.path.join(RAW_ROOT, d)))
     except OSError:
         return None
-    return os.path.join(RAW_ROOT, mappar[-1]) if mappar else None
+    return os.path.join(RAW_ROOT, folders[-1]) if folders else None
 
 
 def docs_dir():
-    """Var dokumenten ligger - samma väg som transcribe_dir skriver till."""
-    return os.path.join(vault_root(), VAULT_FOLDER)
+    """Where the documents are - the same path transcribe_dir writes to.
+
+    Recordings/ is the folder, but an install that already has the old Inspelningar/ keeps
+    using it: the documents are the user's, and they are not moved behind their back.
+    """
+    root = vault_root()
+    if os.path.isdir(os.path.join(root, VAULT_FOLDER)) or not os.path.isdir(os.path.join(root, VAULT_FOLDER_OLD)):
+        return os.path.join(root, VAULT_FOLDER)
+    return os.path.join(root, VAULT_FOLDER_OLD)
 
 
-def senaste_dok():
-    """Senast skrivna mötesdokument (ändringstid, inte namn - 'Möte <stämpel>' är lokalt)."""
+def latest_doc():
+    """The most recently written meeting document (mtime, not name - 'Meeting <stamp>' is local)."""
     try:
-        filer = [os.path.join(docs_dir(), f) for f in os.listdir(docs_dir())
+        files = [os.path.join(docs_dir(), f) for f in os.listdir(docs_dir())
                  if f.endswith(".md")]
     except OSError:
         return None
-    return max(filer, key=os.path.getmtime) if filer else None
+    return max(files, key=os.path.getmtime) if files else None
 
 
-def namn_par(text):
-    """'1=Ada, Deltagare 2=Bo' -> {'Deltagare 1': 'Ada', 'Deltagare 2': 'Bo'}"""
-    ut = {}
-    for par in (text or "").split(","):
-        nyckel, lika, värde = par.partition("=")
-        nyckel, värde = nyckel.strip(), värde.strip()
-        if lika and värde:
-            ut[nyckel if not nyckel.isdigit() else f"Deltagare {nyckel}"] = värde
-    return ut
+def name_pairs(text):
+    """'1=Ada, Speaker 2=Bo' -> {'Speaker 1': 'Ada', 'Speaker 2': 'Bo'}"""
+    out = {}
+    for pair in (text or "").split(","):
+        key, eq, value = pair.partition("=")
+        key, value = key.strip(), value.strip()
+        if eq and value:
+            out[key if not key.isdigit() else f"Speaker {key}"] = value
+    return out
 
 
-def cmd_möte(args):
-    """Titel och deltagare för en inspelning - skrivs i dess session.json.
+def cmd_meeting(args):
+    """Title and participants for a recording - written in its session.json.
 
-    Det är samma fil transkriberingen läser, så namnen hamnar i dokumentet utan
-    nya steg. Utan pågående inspelning gäller senaste mappen (svaret säger vilken).
+    It is the same file the transcription reads, so the names end up in the document without
+    extra steps. Without an ongoing recording the latest folder applies (the answer says which).
     """
     sess = load_session()
-    mapp = args.get("mapp") or (sess.get("dir") if running(sess) else None) or senaste_raw()
-    if not mapp:
-        print(json.dumps({"ok": False, "error": "ingen inspelning hittad"}, ensure_ascii=False))
+    folder = args.get("dir") or (sess.get("dir") if running(sess) else None) or latest_raw()
+    if not folder:
+        print(json.dumps({"ok": False, "error": "no recording found"}, ensure_ascii=False))
         return 1
-    meta_path = os.path.join(mapp, "session.json")
-    meta = läs_json(meta_path)
+    meta_path = os.path.join(folder, "session.json")
+    meta = read_json(meta_path)
     if meta is None:
-        print(json.dumps({"ok": False, "error": f"{mapp} har ingen läsbar session.json"},
+        print(json.dumps({"ok": False, "error": f"{folder} has no readable session.json"},
                          ensure_ascii=False))
         return 1
-    titel = args["_"][0] if args["_"] else args.get("titel")
-    saknar = [k for k in ("titel", "deltagare", "namn", "mapp") if args.get(k) is True]
-    if saknar:      # --deltagare utan värde ska säga det, inte tigas bort
-        print(json.dumps({"ok": False, "error": "värde saknas till " +
-                          ", ".join("--" + k for k in saknar)}, ensure_ascii=False))
+    title = args["_"][0] if args["_"] else args.get("title")
+    missing = [k for k in ("title", "participants", "names", "dir") if args.get(k) is True]
+    if missing:      # --participants without a value must say so, not be ignored
+        print(json.dumps({"ok": False, "error": "value missing for " +
+                          ", ".join("--" + k for k in missing)}, ensure_ascii=False))
         return 1
-    if isinstance(titel, str) and titel.strip():
-        meta["title"] = titel.strip()
-    if isinstance(args.get("deltagare"), str):
-        meta["participants"] = [n.strip() for n in args["deltagare"].split(",") if n.strip()]
-    if isinstance(args.get("namn"), str):
-        meta["names"] = {**(meta.get("names") or {}), **namn_par(args["namn"])}
-    if args.get("rensa"):
-        for nyckel in ("title", "participants", "names"):
-            meta.pop(nyckel, None)
+    if isinstance(title, str) and title.strip():
+        meta["title"] = title.strip()
+    if isinstance(args.get("participants"), str):
+        meta["participants"] = [n.strip() for n in args["participants"].split(",") if n.strip()]
+    if isinstance(args.get("names"), str):
+        meta["names"] = {**(meta.get("names") or {}), **name_pairs(args["names"])}
+    if args.get("clear"):
+        for key in ("title", "participants", "names"):
+            meta.pop(key, None)
     try:
-        skriv_atomiskt(meta_path, json.dumps(meta, ensure_ascii=False))
+        write_atomic(meta_path, json.dumps(meta, ensure_ascii=False))
     except OSError as e:
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
         return 1
-    log(f"möte {mapp}: title={meta.get('title')!r} deltagare={meta.get('participants')} "
-        f"namn={meta.get('names')}")
-    print(json.dumps({"ok": True, "dir": mapp, "title": meta.get("title"),
+    log(f"meeting {folder}: title={meta.get('title')!r} participants={meta.get('participants')} "
+        f"names={meta.get('names')}")
+    print(json.dumps({"ok": True, "dir": folder, "title": meta.get("title"),
                       "participants": meta.get("participants") or [],
                       "names": meta.get("names") or {}}, ensure_ascii=False))
     return 0
 
 
-def röst_katalog():
-    """Registret som JSON - baren och `notat namn` läser samma sak."""
-    return {"på": namn_på(), "rot": RÖST_ROOT, "tröskel": RÖST_TRÖSKEL,
-            "röster": [{"namn": n, "sekunder": round(os.path.getsize(p) / 2 / 16000, 1)}
-                       for n, p in referenser()]}
+def voice_catalog():
+    """The registry as JSON - the bar and `notat voices` read the same thing."""
+    return {"enabled": names_enabled(), "root": VOICE_ROOT, "threshold": VOICE_THRESHOLD,
+            "voices": [{"name": n, "seconds": round(os.path.getsize(p) / 2 / 16000, 1)}
+                       for n, p in references()]}
 
 
-def cmd_namn(args):
-    """Kända röster: visa registret, slå namnigenkänningen på/av, eller spara en röst.
+def cmd_voices(args):
+    """Known voices: show the registry, turn name recognition on/off, or save a voice.
 
-      notat namn                    visa registret
-      notat namn på|av              slå automatiskt namnbyte på/av
-      notat namn Ada ~/roster/ada.wav   spara en röst från en fil (16 kHz mono)
+      notat voices                    show the registry
+      notat voices on|off             turn automatic renaming on/off
+      notat voices Ada ~/voices/ada.wav   save a voice from a file (16 kHz mono)
     """
-    första = args["_"][0] if args["_"] else ""
-    if första.lower() in ("på", "av", "ja", "nej", "on", "off", "true", "false"):
-        på = första.lower() in ("på", "ja", "on", "true")
+    first = args["_"][0] if args["_"] else ""
+    if first.lower() in ("on", "off", "true", "false"):
+        enabled = first.lower() in ("on", "true")
         cfg = notat_config()
-        cfg["namn"] = på
+        cfg["names"] = enabled
         try:
             os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
-            skriv_atomiskt(CONFIG, json.dumps(cfg, ensure_ascii=False, indent=2))
+            write_atomic(CONFIG, json.dumps(cfg, ensure_ascii=False, indent=2))
         except OSError as e:
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
             return 1
-        log(f"namnigenkänning {första}")
-        print(json.dumps({**röst_katalog(), "ok": True}, ensure_ascii=False))
+        log(f"name recognition {first}")
+        print(json.dumps({**voice_catalog(), "ok": True}, ensure_ascii=False))
         return 0
-    if not första:
-        print(json.dumps(röst_katalog(), ensure_ascii=False, indent=2))
+    if not first:
+        print(json.dumps(voice_catalog(), ensure_ascii=False, indent=2))
         return 0
     if len(args["_"]) < 2:
-        print(json.dumps({"ok": False, "error": "använd: notat namn <Namn> <wav-fil>"},
+        print(json.dumps({"ok": False, "error": "usage: notat voices <Name> <wav-file>"},
                          ensure_ascii=False))
         return 1
-    namn, fil = första, args["_"][1]
-    if not os.path.exists(fil):
-        print(json.dumps({"ok": False, "error": f"{fil} finns inte"}, ensure_ascii=False))
+    name, file = first, args["_"][1]
+    if not os.path.exists(file):
+        print(json.dumps({"ok": False, "error": f"{file} does not exist"}, ensure_ascii=False))
         return 1
-    if not spara_röst(namn, fil):
-        print(json.dumps({"ok": False, "namn": namn,
-                          "error": f"kunde inte spara rösten: {fil} måste vara 16 kHz mono wav "
-                                   f"med minst {int(RÖST_MIN)} s tal, och en längre referens finns redan"},
+    if not save_voice(name, file):
+        print(json.dumps({"ok": False, "name": name,
+                          "error": f"could not save the voice: {file} must be 16 kHz mono wav "
+                                   f"with at least {int(VOICE_MIN)} s of speech, and a longer reference already exists"},
                          ensure_ascii=False))
         return 1
-    log(f"röst sparad för {namn} ur {fil}")
-    print(json.dumps({**röst_katalog(), "ok": True, "namn": namn}, ensure_ascii=False))
+    log(f"voice saved for {name} from {file}")
+    print(json.dumps({**voice_catalog(), "ok": True, "name": name}, ensure_ascii=False))
     return 0
 
 
-def cmd_glöm(args):
-    """notat glöm <Namn> - radera röstprofilen (röster är biometri)."""
-    namn = args["_"][0] if args["_"] else ""
-    path = os.path.join(RÖST_ROOT, namn.replace("/", "-") + ".wav") if namn else ""
-    if not namn or not os.path.exists(path):
-        print(json.dumps({"ok": False, "error": f"ingen röstprofil för {namn or '?'}"},
+def cmd_forget(args):
+    """notat forget <Name> - delete the voice profile (voices are biometrics)."""
+    name = args["_"][0] if args["_"] else ""
+    path = os.path.join(VOICE_ROOT, name.replace("/", "-") + ".wav") if name else ""
+    if not name or not os.path.exists(path):
+        print(json.dumps({"ok": False, "error": f"no voice profile for {name or '?'}"},
                          ensure_ascii=False))
         return 1
     os.unlink(path)
-    log(f"röstprofil borttagen: {namn}")
-    print(json.dumps({**röst_katalog(), "ok": True, "borttagen": namn}, ensure_ascii=False))
+    log(f"voice profile removed: {name}")
+    print(json.dumps({**voice_catalog(), "ok": True, "removed": name}, ensure_ascii=False))
     return 0
 
 
-def cmd_sök(args):
-    """notat sök <ord> - söker i valvets mötesdokument.
+def cmd_search(args):
+    """notat search <word> - searches the vault's meeting documents.
 
-    Mätt på den här maskinen (100-1000 dokument): rekursiv sökning tar under 0,01 s,
-    ett FTS5-index bygger på 0,3 s och frågar på 1 ms — för enstaka sökningar är
-    indexet bara extra att hålla i synk. ripgrep först, alltså.
+    Measured on this machine (100-1000 documents): a recursive search takes under 0.01 s,
+    an FTS5 index is built in 0.3 s and queried in 1 ms — for occasional searches the
+    index is just extra to keep in sync. ripgrep first, then.
     """
-    ordet = args["_"][0] if args["_"] else ""
-    if not ordet:
-        print(json.dumps({"ok": False, "error": "använd: notat sök <ord>"}, ensure_ascii=False))
+    word = args["_"][0] if args["_"] else ""
+    if not word:
+        print(json.dumps({"ok": False, "error": "usage: notat search <word>"}, ensure_ascii=False))
         return 1
     if not shutil.which("rg"):
-        print(json.dumps({"ok": False, "error": "ripgrep (rg) saknas"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": "ripgrep (rg) is missing"}, ensure_ascii=False))
         return 1
-    r = sh("rg", "-n", "--no-heading", "--color=never", "-F", ordet, docs_dir())
-    rader = (r.stdout or "").splitlines()
-    if not rader:
-        print(f"inga träffar på {ordet!r} i {docs_dir()}")
+    r = sh("rg", "-n", "--no-heading", "--color=never", "-F", word, docs_dir())
+    lines = (r.stdout or "").splitlines()
+    if not lines:
+        print(f"no hits for {word!r} in {docs_dir()}")
         return 1
-    for rad in rader:
-        print(rad)
-    print(f"\n{len(rader)} träffar i {docs_dir()}")
+    for line in lines:
+        print(line)
+    print(f"\n{len(lines)} hits in {docs_dir()}")
     return 0
 
 
-def cmd_senaste(args):
-    """notat senaste [--öppna] - sökvägen till det senast skrivna dokumentet."""
-    path = senaste_dok()
+def cmd_latest(args):
+    """notat latest [--open] - the path to the most recently written document."""
+    path = latest_doc()
     if not path:
-        print(json.dumps({"ok": False, "error": f"inga dokument i {docs_dir()}"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": f"no documents in {docs_dir()}"}, ensure_ascii=False))
         return 1
-    if args.get("öppna") and shutil.which("xdg-open"):
+    if args.get("open") and shutil.which("xdg-open"):
         subprocess.Popen(["xdg-open", path])
     print(path)
     return 0
@@ -1690,29 +1716,29 @@ def main(argv):
     if not argv:
         return cmd_toggle({})
     cmd, rest = argv[0], argv[1:]
-    # --nyckel=värde och --nyckel värde; bara de som tar ett värde får sluka nästa ord,
-    # så --wait/--json/--rensa fortsätter vara rena växlar.
-    värde_flagg = ("titel", "deltagare", "namn", "mapp")
+    # --key=value and --key value; only those that take a value may swallow the next word,
+    # so --wait/--json/--clear stay plain switches.
+    value_flags = ("title", "participants", "names", "dir")
     flags = {"_": []}
     i = 0
     while i < len(rest):
         a = rest[i]
         if a.startswith("--"):
-            nyckel, lika, värde = a[2:].partition("=")
-            nästa = rest[i + 1] if i + 1 < len(rest) else None
-            if not lika and nyckel in värde_flagg and nästa is not None and not nästa.startswith("--"):
-                lika, värde = "=", nästa
+            key, eq, value = a[2:].partition("=")
+            nxt = rest[i + 1] if i + 1 < len(rest) else None
+            if not eq and key in value_flags and nxt is not None and not nxt.startswith("--"):
+                eq, value = "=", nxt
                 i += 1
-            flags[nyckel] = värde if lika else True
+            flags[key] = value if eq else True
         else:
             flags["_"].append(a)
         i += 1
     table = {"start": cmd_start, "stop": cmd_stop, "status": cmd_status,
              "transcribe": cmd_transcribe, "devices": cmd_devices, "toggle": cmd_toggle,
-             "valj": cmd_valj, "modeller": cmd_modeller, "modell": cmd_modell,
-             "hamta": cmd_hamta, "röster": cmd_röster, "diar-hamta": cmd_diar_hamta,
-             "möte": cmd_möte, "namn": cmd_namn, "glöm": cmd_glöm,
-             "sök": cmd_sök, "senaste": cmd_senaste}
+             "select": cmd_select, "models": cmd_models, "model": cmd_model,
+             "download": cmd_download, "speakers": cmd_speakers,
+             "meeting": cmd_meeting, "voices": cmd_voices, "forget": cmd_forget,
+             "search": cmd_search, "latest": cmd_latest}
     if cmd in ("-h", "--help", "help"):
         print(USAGE)
         return 0

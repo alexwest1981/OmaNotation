@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hur mycket av varje mikrofonstycke är eko av en utgång? Mät, gissa inte."""
+"""How much of each microphone paragraph is echo of an output? Measure, do not guess."""
 import importlib.util
 import importlib.machinery
 import json
@@ -11,19 +11,19 @@ spec = importlib.util.spec_from_loader("notat", importlib.machinery.SourceFileLo
 notat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(notat)
 
-RAWROT = os.path.join(os.path.expanduser("~"), ".local/share/notat/raw")
+RAW_ROOT = os.path.join(os.path.expanduser("~"), ".local/share/notat/raw")
 
 
-def senaste():
-    if not os.path.isdir(RAWROT):
+def latest():
+    if not os.path.isdir(RAW_ROOT):
         return ""
-    mappar = [os.path.join(RAWROT, d) for d in os.listdir(RAWROT)]
-    return max(mappar, key=os.path.getmtime) if mappar else ""
+    folders = [os.path.join(RAW_ROOT, d) for d in os.listdir(RAW_ROOT)]
+    return max(folders, key=os.path.getmtime) if folders else ""
 
 
-RAW = sys.argv[1] if len(sys.argv) > 1 else senaste()
+RAW = sys.argv[1] if len(sys.argv) > 1 else latest()
 if not RAW or not os.path.isdir(RAW):
-    sys.exit(f"användning: {sys.argv[0]} <mapp med session.json>   (inga inspelningar i {RAWROT})")
+    sys.exit(f"usage: {sys.argv[0]} <dir with session.json>   (no recordings in {RAW_ROOT})")
 meta = json.load(open(os.path.join(RAW, "session.json"), encoding="utf-8"))
 
 envs, text = {}, {}
@@ -34,24 +34,24 @@ for i, t in enumerate(meta["tracks"], 1):
     data = json.load(open(js, encoding="utf-8")) if os.path.exists(js) else {"transcription": []}
     text[i] = notat.paragraphs(notat.segments(data, f"{t['label']}#{i}"))
 
-print("spår:", {i: f"{meta['tracks'][i-1]['label']} {meta['tracks'][i-1]['file']}" for i in envs})
+print("tracks:", {i: f"{meta['tracks'][i-1]['label']} {meta['tracks'][i-1]['file']}" for i in envs})
 
 
-def stycke(env, hop, a, b):
+def piece(env, hop, a, b):
     return env[int(a / hop):int(b / hop)]
 
 
-def eko_andel(a, b, fönster=1.0, ratio=0.85, hop=0.02):
-    n = max(1, int(fönster / hop))
-    träff = tot = 0
+def echo_share(a, b, window=1.0, ratio=0.85, hop=0.02):
+    n = max(1, int(window / hop))
+    hits = total = 0
     for i in range(0, min(len(a), len(b)), n):
         x, y = a[i:i + n], b[i:i + n]
         if len(x) < 5:
             break
-        tot += 1
+        total += 1
         if notat.korr(x, y) >= ratio:
-            träff += 1
-    return (träff / tot) if tot else 0.0
+            hits += 1
+    return (hits / total) if total else 0.0
 
 
 for i, paras_i in text.items():
@@ -60,19 +60,19 @@ for i, paras_i in text.items():
             continue
         for p in paras_i:
             for q in paras_j:
-                kortast = min(p[1] - p[0], q[1] - q[0])
-                if kortast <= 0 or min(p[1], q[1]) - max(p[0], q[0]) < 0.5 * kortast:
+                shortest = min(p[1] - p[0], q[1] - q[0])
+                if shortest <= 0 or min(p[1], q[1]) - max(p[0], q[0]) < 0.5 * shortest:
                     continue
                 e1, h1 = envs[i]
                 e2, h2 = envs[j]
                 if not e1 or not e2:
                     continue
-                a = stycke(e1, h1, p[0], p[1])
-                b = stycke(e2, h2, q[0], q[1])
-                print(f"\nspår {i} ({meta['tracks'][i-1]['label']}) [{p[0]:.1f}-{p[1]:.1f}] mot spår {j} "
+                a = piece(e1, h1, p[0], p[1])
+                b = piece(e2, h2, q[0], q[1])
+                print(f"\ntrack {i} ({meta['tracks'][i-1]['label']}) [{p[0]:.1f}-{p[1]:.1f}] vs track {j} "
                       f"({meta['tracks'][j-1]['label']}) [{q[0]:.1f}-{q[1]:.1f}]")
-                print(f"   hel stycke-korrelation: {notat.korr(a, b):.2f}")
-                print(f"   andel 1 s-fönster med korr>=0.85: {eko_andel(a, b):.2f} (a mot b), {eko_andel(b, a):.2f} (b mot a)")
-                print(f"   nivå: {sum(a)/max(1,len(a)):.0f} mot {sum(b)/max(1,len(b)):.0f}")
+                print(f"   whole paragraph correlation: {notat.korr(a, b):.2f}")
+                print(f"   share of 1 s windows with corr>=0.85: {echo_share(a, b):.2f} (a vs b), {echo_share(b, a):.2f} (b vs a)")
+                print(f"   level: {sum(a)/max(1,len(a)):.0f} vs {sum(b)/max(1,len(b)):.0f}")
                 print(f"   text a: {p[3][:80]}")
                 print(f"   text b: {q[3][:80]}")

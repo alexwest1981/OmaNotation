@@ -1,8 +1,8 @@
 {
-  "_kommentar": "notat: vilka enheter som spelas in, vilken modell, om rösterna skiljs åt och var dokumenten hamnar. Ändras enklast i menyn i toppbaren (högerklick på mikrofonikonen).",
-  "uteslut": [],
-  "modell": "",
-  "röster": true,
-  "antal_talare": 0,
-  "valv": ""
+  "_comment": "notat: which devices are recorded, which model, whether the voices are separated and where the documents end up. Easiest changed in the menu in the top bar (right-click the microphone icon).",
+  "exclude": [],
+  "model": "",
+  "speakers": true,
+  "speaker_count": 0,
+  "vault": ""
 }
