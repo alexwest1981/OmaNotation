@@ -1,13 +1,13 @@
 # OmaNotation (command: `notat`)
 
+![OmaNotation](preview.jpg)
+
+Both images in this repository are illustrations of the use case, not screenshots of the widget.
+
 Meeting and lecture note taker for Linux/Omarchy. It records **both audio sides** (the meeting
 from each output's monitor, you from the microphones), transcribes with whisper.cpp and writes a
 markdown document when you stop. A button in the Omarchy bar starts and stops it; right-click
 picks sources, model and downloads.
-
-![A meeting room with the notes OmaNotation writes](meeting-notes.jpg)
-
-(The images in this repository are illustrations, not screenshots of the widget.)
 
 ## Installation
 
@@ -64,6 +64,8 @@ realtime on an RTX 3060 Ti, against roughly 1× on CPU.
 | `notat sök <word>` | search the meeting documents (ripgrep over the vault) |
 | `notat senaste [--öppna]` | the path to the most recently written document |
 | `notat stop --no-summary` | skip the AI summary |
+
+![A meeting room with the notes OmaNotation writes](meeting-notes.jpg)
 
 **The bar button** (`io.github.alexwest1981.omanotation`, the microphone icon): left click starts
 and stops and shows a counter. **Right click** opens the menu in three sections: **Sources to
